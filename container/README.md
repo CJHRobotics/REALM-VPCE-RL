@@ -1,11 +1,17 @@
 # Webots on GAIVI — container setup and status
 
-Status as of **2026-08-24**. Webots R2025a runs headless on GAIVI compute
-nodes, verified end to end. Data collection and RL training on the cluster
-are not yet wired up.
+Status as of **2026-11-18**. Webots R2025a runs headless on GAIVI compute
+nodes, and batch data collection runs there against the real VPCE arenas —
+see the measured timings under "Using the GPUs" below. RL training on the
+cluster is **not** wired up: the `WebotsEnv` skeleton is still a stub.
+
+The sections below carry two dates on purpose. The container facts, the
+problems hit and fixed, and the smoke-test results are the original
+2026-08-24 record and still hold. Anything about what is done or not done
+was corrected on 2026-11-18, when this repo was forked for the RL work.
 
 This exists to set up **reinforcement learning**, which needs many
-simulator instances running for a long time. Batch data collection is the
+simulator instances running for a long time. Batch data collection was the
 near-term use and the convenient way to prove the setup works.
 
 ---
@@ -70,7 +76,7 @@ parallel envs) than for one collection run.
 |---|---|
 | `container/Dockerfile` | the image recipe: Ubuntu 22.04, Python 3.11 (deadsnakes), Xvfb, Mesa, Webots R2025a `.deb` |
 | `.github/workflows/build-webots-image.yml` | builds it on Actions, pushes to GHCR; manual trigger only |
-| `slurm/webots_smoke.sh` | staged headless smoke test, no GPU requested |
+| `slurm/render_check.sh` | staged headless render check — is the renderer producing images? Replaced `webots_smoke.sh`, whose results are recorded below |
 
 The REALM repo and its venv deliberately stay **outside** the image and are
 bind-mounted at run time (singularity auto-mounts `$HOME`, `$PWD`, `/tmp`).
@@ -96,7 +102,7 @@ singularity pull webots_r2025a.sif docker://ghcr.io/cjhrobotics/realm-webots:<ta
 5. Verify and smoke test:
 
 ```bash
-sbatch slurm/webots_smoke.sh
+sbatch slurm/render_check.sh
 ```
 
 ### The stale-image trap
@@ -109,14 +115,21 @@ round. Either use a fresh tag each build, or clear both artifacts:
 rm -f webots_r2025a.sif && rm -rf /home/c/chamilton4/.sing-cache
 ```
 
-Stage 1b of the smoke test prints the Qt xcb packages in the image
-specifically so a stale image is visible at a glance in the log.
+The retired `webots_smoke.sh` printed the image's Qt xcb packages at stage
+1b specifically so a stale image was visible at a glance in the log.
+`render_check.sh` does not, so a fresh tag is now the only guard — or check
+by hand:
+
+```bash
+singularity exec webots_r2025a.sif dpkg -l | grep xcb-cursor
+```
 
 ---
 
 ## What has been tested
 
-Smoke test job `451104` on node GPU6, 16 CPUs, **no GPU**, all stages pass:
+Smoke test job `451104` (2026-08-24, the retired `webots_smoke.sh`) on node
+GPU6, 16 CPUs, **no GPU**, all stages pass:
 
 | check | result |
 |---|---|
@@ -235,19 +248,37 @@ with a GPU, but they are the levers if one is ever unavailable.
 **Done:** image builds and deploys; Webots runs headless on a compute node
 and renders camera frames; no GPU needed.
 
-**Not done:**
+**Done since, and corrected here on 2026-11-18** — this list previously
+said all of the following was outstanding:
 
-- **Run REALM's own controller.** Everything so far used a Webots *sample*
-  world. Needs three things: a venv built **inside** the container (so
-  packages link against container libs) on the host filesystem, a
-  `runtime.ini` pointing at that interpreter instead of the hardcoded Mac
-  path, and a job script launching the right `.wbt` headless. Note there is
-  no obvious VPCE `.wbt` — worlds present are `break_room.wbt`,
-  `empty_room.wbt`, `empty_room_tile.wbt`.
-- **Verify Webots' Python bindings import under Python 3.11** in the
-  container (`python3.11 -c "import controller"` with `PYTHONPATH` set).
-  Untested.
-- **Benchmark** llvmpipe on the real world.
+- **REALM's own controller runs headless.** `slurm/collect_data.sh` launches
+  `simulation/worlds/collect_data.wbt` against the VPCE arenas in
+  `simulation/worlds/environments/vpce/`. The claim that there was "no
+  obvious VPCE `.wbt`" is stale: `collect_data.wbt`, `render_check.wbt` and
+  `perf_probe.wbt` all exist.
+- **No venv is built inside the container.** That was tried and abandoned —
+  `slurm/_webots_env.sh` records why: it duplicated several GB (torch alone
+  is ~3 GB), filled the home quota, and bought nothing the preflight does
+  not verify directly. The interpreter comes from a **conda environment on
+  the host**, named by `CONDA_ENV_NAME` (default `realm-vpce`), bind-mounted
+  into the image.
+- **`runtime.ini` is no longer a hardcoded Mac path.** `write_runtime_ini()`
+  in `_webots_env.sh` rewrites one per controller on every run, pointing at
+  whichever interpreter that job resolved. The files are gitignored and
+  machine-specific.
+- **Webots' Python bindings are verified under 3.11.** The `preflight()`
+  function imports `controller` inside the image before any world loads,
+  alongside numpy, pandas, h5py, cv2, matplotlib, PIL and tqdm. A missing
+  binding fails there with a clear message instead of as a Webots fault.
+- **llvmpipe is benchmarked on the real world.** The numbers are in "Using
+  the GPUs" below, measured per collection position on `circ_lm8_r0`.
+
+**Still not done:**
+
+- **Extend the preflight for RL.** It checks the collection packages but not
+  `torch`, `gymnasium` or `stable_baselines3`. Add them before the first
+  training job, or a missing one surfaces as a controller that exits with no
+  useful message.
 - **RL: extern controllers.** The `WebotsEnv` skeleton in
   `realm_tools/simulation_lib/webots_torch_environment.py` is still empty.
   Build it **extern-controller-first** (`WEBOTS_CONTROLLER_URL` +

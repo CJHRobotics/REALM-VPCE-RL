@@ -7,6 +7,13 @@ import shutil
 
 SETUP_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# setup/ is already on sys.path when this file is run as a script, but not
+# when it is imported; make the sibling import work either way.
+if SETUP_DIR not in sys.path:
+    sys.path.insert(0, SETUP_DIR)
+
+from add_runtime_ini import VENV_NAME
+
 
 def find_python_version():
     for executable in ["python3.11", "python3", "python"]:
@@ -105,20 +112,20 @@ def main():
 
     if args.uninstall:
         print("Uninstalling REALM virtual environment...")
-        remove_venv("realm_venv")
+        remove_venv(VENV_NAME)
         print("\nUninstall complete.")
         return
 
     print(f"Project path: {project_path}")
     python_executable = find_python_version()
 
-    create_venv(python_executable, "realm_venv")
-    install_requirements("realm_venv", os.path.join(SETUP_DIR, "requirements.txt"))
-    add_project_to_path("realm_venv", project_path)
+    create_venv(python_executable, VENV_NAME)
+    install_requirements(VENV_NAME, os.path.join(SETUP_DIR, "requirements.txt"))
+    add_project_to_path(VENV_NAME, project_path)
     run_runtime_ini_setup()
 
     print("\nSetup complete.")
-    print("  Environment created: realm_venv")
+    print(f"  Environment created: {VENV_NAME}")
 
 
 if __name__ == "__main__":

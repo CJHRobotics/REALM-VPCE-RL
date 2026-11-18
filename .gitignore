@@ -243,6 +243,9 @@ analysis/**/figures/
 .DS_Store
 .env
 .vscode/
+# This repo's venv. Note the old `*_venv/` rule below does NOT match this
+# name -- it is kept for the legacy `realm_venv` and any personal variant.
+venv-vpce-rl/
 *_venv/
 *.wbproj
 .claude

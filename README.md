@@ -114,34 +114,34 @@ cd REALM-VPCE-RL
 ### 2. Run the install script
 
 ```shell
-python setup/realm_install.py
+python3.11 setup/realm_install.py
 ```
 
 This will:
 - Find Python 3.11 on your system
-- Create `realm_venv` with all dependencies
+- Create `venv-vpce-rl` with all dependencies
 - Add the project root to the venv's Python path
 - Generate `runtime.ini` files in all Webots controller directories
 
 To remove the environment:
 ```shell
-python setup/realm_install.py --uninstall
+python3.11 setup/realm_install.py --uninstall
 ```
 
 ### 3. Activate the environment
 
 **macOS/Linux:**
 ```shell
-source realm_venv/bin/activate
+source venv-vpce-rl/bin/activate
 ```
 
 **Windows:**
 ```shell
-realm_venv\Scripts\activate
+venv-vpce-rl\Scripts\activate
 ```
 
 > If you add a new controller under `simulation/controllers/`, re-run 
-> `python setup/add_runtime_ini.py` to generate its `runtime.ini`.
+> `python3.11 setup/add_runtime_ini.py` to generate its `runtime.ini`.
 
 ---
 

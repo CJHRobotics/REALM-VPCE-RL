@@ -1,7 +1,29 @@
 import os
 import platform
 
+# The virtual environment's directory name, defined here and imported by
+# realm_install.py so the two can never disagree. Anything else that needs it
+# (job scripts, docs) should match this.
+VENV_NAME = "venv-vpce-rl"
+
+
+def venv_python(project_path):
+    """Absolute path to the venv interpreter Webots should launch."""
+    if platform.system() == "Windows":
+        return os.path.join(project_path, VENV_NAME, "Scripts", "python.exe")
+    return os.path.join(project_path, VENV_NAME, "bin", "python3")
+
+
 def add_runtime_ini_to_dirs(controllers_dir, python_venv_path):
+    if not os.path.isdir(controllers_dir):
+        # os.walk yields nothing for a missing path, so without this check a
+        # wrong directory name writes zero files and still reports success.
+        # That is exactly how the old hardcoded "Simulation" (capital S) went
+        # unnoticed: it resolved on case-insensitive macOS and silently did
+        # nothing on Linux.
+        raise FileNotFoundError(f"controllers directory not found: {controllers_dir}")
+
+    written = 0
     for dirpath, dirnames, _ in os.walk(controllers_dir):
         for dirname in dirnames:
             dir_full_path = os.path.join(dirpath, dirname)
@@ -12,17 +34,17 @@ def add_runtime_ini_to_dirs(controllers_dir, python_venv_path):
                 out_file.write(f"COMMAND = {python_venv_path}")
 
             print(f"Added runtime.ini to {dir_full_path}")
+            written += 1
+
+    if written == 0:
+        raise RuntimeError(f"no controller directories under {controllers_dir}")
+    return written
 
 
 def main():
     project_path = os.getcwd()
-    if platform.system() == 'Windows':
-        python_venv_path = os.path.join(project_path, "realm_venv", "Scripts", "python.exe")
-    else:
-        python_venv_path = os.path.join(project_path, "realm_venv", "bin", "python3")
-    controllers_dir = os.path.join(project_path, "Simulation", "controllers")
-
-    add_runtime_ini_to_dirs(controllers_dir, python_venv_path)
+    controllers_dir = os.path.join(project_path, "simulation", "controllers")
+    add_runtime_ini_to_dirs(controllers_dir, venv_python(project_path))
 
 
 if __name__ == "__main__":
