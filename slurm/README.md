@@ -1,8 +1,14 @@
 # SLURM job scripts for GAIVI
 
-Job scripts here submit the place-field analysis pipeline to GAIVI's
-scheduler. Each script is a thin wrapper: activate the venv, `cd` into
-the repo, and run one of the analysis entry points.
+Job scripts here submit this repo's work to GAIVI's scheduler. Each script is
+a thin wrapper: resolve the interpreter, `cd` into the repo, and run one entry
+point. The data-collection and render-check jobs additionally run Webots
+headless inside the Singularity image, which `_webots_env.sh` sets up.
+
+The RL training and evaluation jobs are not written yet. Write them against
+the patterns in `vpce_paper_jobs/` — see **Job templates** below — rather than
+from a blank file: the `#SBATCH` headers there encode node choices that took
+real debugging to find.
 
 ## Quick reference
 
@@ -22,30 +28,34 @@ one collection job per arena with the flags above (`--exclusive`,
 bash slurm/collect_data.sh --submit
 ```
 
-```bash
-sbatch slurm/scale_distribution.sh --envs circ_lm8_r3
-```
-
 | script | job name | time | mem | GPU | what it runs |
 |---|---|---|---|---|---|
 | `collect_data.sh` | `collect` | 24 h | 32 G | `gpu:1` | renders one arena headless in Webots and writes its feature dataset, via `simulation/controllers/collect_data`. Needs the Singularity image; `_webots_env.sh` sets it up |
-| `scale_distribution.sh` | `scale-dist` | 24 h | 128 G | `gpu:1` | Experiment 2 — field-size distribution against enclosure scale, via `analysis/experiment_channel_isolation/run_scale_distribution.py` |
-| `wall_proximity.sh` | `wall-prox` | 24 h | 128 G | `gpu:1` | Experiment 3 — whether large fields sit further from walls and landmarks than their own shape would by chance, against uniform and Rule 11-spaced random placements, via `analysis/experiment_channel_isolation/run_wall_proximity.py`. Reuses Experiment 2's cached libraries; with them present it needs far less than the header asks |
-| `prune_audit.sh` | `prune-audit` | 24 h | 128 G | `gpu:1` | why a library is empty: follows every candidate to the rule that pruned it, scale by scale, via `analysis/experiment_channel_isolation/run_prune_audit.py`. Rebuilds the libraries it audits, since no cache holds the candidates that were rejected |
-| `extent_validation.sh` | `extent-val` | 24 h | 128 G | `gpu:1` | the justification for `EXTENT_PCTL = 65`: fields of known shape drawn at every q, non-fields that must be refused, and the real libraries at q = 50/65/80, via `analysis/experiment_channel_isolation/run_extent_validation.py`. `bash slurm/extent_validation.sh --submit` runs one job per arena and a report job that mails once they finish |
-| `multifield_examples.sh` | `multifield` | 2 h | 64 G | `gpu:1` | draws the clusters the contiguity rule rejects — responses in several separate places, i.e. multi-field cells — for one arena and channel (default `corr_lm8_l10w2`, `hog`): one figure per cluster and an overview, with a count of how many rejects really are multi-field. Rebuilds that one library, via `analysis/experiment_channel_isolation/run_multifield_examples.py` |
-| `replot.sh` | `replot` | 1 h | 16 G | none | redraws figures and re-sends reports **from the data cache**, recomputing nothing and loading no dataset: `sbatch slurm/replot.sh` does all four experiments (`prune`, `geometry`, `validation`, `scale`); name any to do a subset. For a change of title, label or layout. `bash slurm/replot.sh --dry-run` prints what it would run |
 | `render_check.sh` | `render-chk` | 1 h | 16 G | `gpu:1` | is the headless renderer actually producing images? Run this before a long collection |
 
 `check_dataset.py` and `report_collection.py` are helpers called by
 `collect_data.sh`, not job scripts.
 
-Scripts for the retired experiments (channel isolation, field recovery,
-pruning sweep, locality test, landmark null, geometry recovery, feature-set
-comparison, perf probe) were removed once Experiment 2 became the active line
-of work. They are in the git history if any is needed again — the analysis
-code for several of them is still in `analysis/`, so only the wrapper has to
-be restored.
+## Job templates (`vpce_paper_jobs/`)
+
+Eleven job scripts from the VPCE place-field paper are kept there. **None of
+them runs as-is** — their Python entry points lived in
+`analysis/experiment_channel_isolation/`, which left with the paper analysis
+when this repo was forked. They are here as worked examples:
+
+| script | the pattern worth copying |
+|---|---|
+| `scale_distribution.sh` | a long analysis job that mails an `ExperimentReport` with its own CSVs and figures attached |
+| `extent_validation.sh` | `--submit` fan-out: one job per arena plus a dependent report job that mails once they all finish |
+| `wall_proximity.sh` | reusing another job's cached libraries instead of recomputing them |
+| `prune_audit.sh` | a diagnostic job that rebuilds what no cache holds |
+| `multifield_examples.sh` | a short single-arena figure job (2 h, 64 G) |
+| `field_geometry.sh`, `kappa_rerun.sh`, `paper_rerun.sh`, `paper_finish.sh`, `paper_figures.sh` | multi-stage reruns that chain stages with `--dependency` |
+| `replot.sh` | redrawing figures from the data cache with no GPU and no dataset load |
+
+To restore one as a working job, point it at a new entry point under
+`analysis/`. The full VPCE analysis code is on the `vpce` remote and in this
+repo's history at `c947bf0`.
 
 All run on the **`general`** partition with 16 CPUs. Logs land in
 `slurm/logs/<job-name>-<jobid>.out` and `.err`, git-ignored.
@@ -87,34 +97,36 @@ Pinning the GRES to `gpu:A40:1` queues the job behind everything else waiting
 on GPU43 and GPU44, which in practice costs far more than the A40 saves.
 Asking for any GPU schedules more or less immediately.
 
-Nothing breaks on a smaller card. The widest feature matrices (`visual`
-7.2 GB, `all` 7.3 GB) will not fit an 11 GB 1080 Ti alongside their working
-set, but `rules.feature_sq_distances` and `rules.environment_readout` both
-test free VRAM and fall back to the CPU for that stage — so a small GPU costs
-time, not correctness. Ward linkage is sequential and stays on the CPU either
-way.
+Nothing breaks on a smaller card, provided the code asks. The VPCE paper's
+widest feature matrices (`visual` 7.2 GB, `all` 7.3 GB) did not fit an 11 GB
+1080 Ti alongside their working set; the pipeline tested free VRAM and fell
+back to the CPU for those stages, so a small card cost time rather than
+correctness. Worth keeping for the RL work: an agent that holds a replay
+buffer and a VPCE encoder on the same card has a real memory ceiling, and
+`gpu:1` can land it on 11 GB.
 
 Take an A40 for a run that needs the speed, without editing anything:
 
 ```bash
-sbatch --gres=gpu:A40:1 slurm/scale_distribution.sh
+sbatch --gres=gpu:A40:1 slurm/<job>.sh
 ```
 
 ### Two things the node table implies
 
 **`--mem=128G` excludes GPU6.** That is exactly GPU6's total RAM, and SLURM
 only offers a node slightly less than its physical memory, so the request can
-never fit there. "Any GPU" therefore means GPU42/43/44 in practice. The jobs
-do not need 128 GB — the largest working set is a 7.3 GB feature matrix plus
-its 3.6 GB pairwise block, and local runs peak around 12 GB — so lowering the
-request to `--mem=64G` would genuinely widen where they can land.
+never fit there. "Any GPU" therefore means GPU42/43/44 in practice. The paper
+jobs asked for 128 G and did not need it — their largest working set was a
+7.3 GB feature matrix plus its 3.6 GB pairwise block, peaking around 12 GB
+locally. Ask for what a job actually uses; `--mem=64G` widens where it lands.
 
-**`Quick` holds the A100 nodes and allows 1-day jobs.** Every script here is
-6 hours or less, so they fit comfortably. If `general` is congested, that
-partition is worth trying:
+**`Quick` holds the A100 nodes and allows 1-day jobs.** If `general` is
+congested it is worth trying — but note the A100 caveat in `collect_data.sh`:
+compute-only cards have no display engine, so anything that renders through
+Webots drops to software GL there. Analysis and training jobs are unaffected.
 
 ```bash
-sbatch --partition=Quick slurm/scale_distribution.sh
+sbatch --partition=Quick slurm/<job>.sh
 ```
 
 ## Full node inventory
@@ -165,9 +177,10 @@ scancel <jobid>
 New experiments build their own report by subclassing `ExperimentReport` in
 `realm_tools/experiment_lib/reporting.py` — the body is composed from the
 experiment's results rather than scraped from the job log, and attaches its
-own CSVs and figures. `scale_distribution.sh` mails this way; `collect_data.sh`
-mails through `report_collection.py`, which uses the same SMTP transport.
-Every send is a silent no-op without `EMAIL_TO`.
+own CSVs and figures. `collect_data.sh` mails through `report_collection.py`,
+which uses the same SMTP transport; `vpce_paper_jobs/scale_distribution.sh` is
+the worked example of the `ExperimentReport` path. Every send is a silent
+no-op without `EMAIL_TO`.
 
-The older log-scraping CLI (`send_report.py`) was removed with the job scripts
-that used it — no surviving script called it.
+Set `--mail-user` in a new job's `#SBATCH` header to your own address. The
+parked scripts carry the VPCE paper author's.
