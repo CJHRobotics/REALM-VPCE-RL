@@ -19,9 +19,10 @@
 # pixel std alongside the timing: a flag that makes capture instant by
 # returning blank frames is not a speedup.
 #
-# Needs EMAIL_TO exported to receive the images; without it they are still
-# written to data_cache/render_check/ and the send is a silent no-op. Set the
-# defaults once in ~/.bashrc on GAIVI:
+# The images are the product, so EMAIL_TO is required and the job refuses to
+# start without it -- see the check below. Set ALLOW_NO_EMAIL=1 to write the
+# files to data_cache/render_check/ without sending. Set the defaults once in
+# ~/.bashrc on GAIVI:
 #   export EMAIL_TO=chamilton4@usf.edu EMAIL_FROM=chamilton4@usf.edu
 #   export EMAIL_SMTP=smtp.usf.edu EMAIL_SMTP_PORT=587
 #
@@ -100,11 +101,30 @@ WORLD="$REPO_DIR/simulation/worlds/render_check.wbt"
 [[ -f "$SIF"   ]] || { echo "ERROR: image not found: $SIF" >&2; exit 1; }
 [[ -f "$WORLD" ]] || { echo "ERROR: world not found: $WORLD" >&2; exit 1; }
 
+# This job exists to put a picture in front of you, so a run that cannot
+# deliver one has no product. reporting.send_email never raises -- by design,
+# so a mail failure cannot invalidate a collection run's data -- which means
+# without this check an unset EMAIL_TO surfaces only as one line near the end
+# of the log, after the GPU time is already spent.
+if [[ -z "${EMAIL_TO:-}" && "${ALLOW_NO_EMAIL:-0}" != "1" ]]; then
+    {
+        echo "ERROR: EMAIL_TO is not set, so the captured images would be written"
+        echo "       to data_cache/render_check/ and never sent anywhere."
+        echo
+        echo "  Set it for this job:   EMAIL_TO=you@usf.edu sbatch slurm/render_check.sh"
+        echo "  Or once, in ~/.bashrc: export EMAIL_TO=you@usf.edu EMAIL_FROM=you@usf.edu"
+        echo "                         export EMAIL_SMTP=smtp.usf.edu EMAIL_SMTP_PORT=587"
+        echo
+        echo "  To write the files without sending: ALLOW_NO_EMAIL=1 sbatch slurm/render_check.sh"
+    } >&2
+    exit 1
+fi
+
 echo "===================================================================="
 echo "Job     : ${SLURM_JOB_ID:-local}   node $(hostname)"
 echo "Maze    : ${MAZE}"
 echo "Webots  : extra flags [${WEBOTS_EXTRA[*]:-none}]   run tag '${RUN_TAG}'"
-echo "Email   : ${EMAIL_TO:-(EMAIL_TO unset - files written, no send)}"
+echo "Email   : ${EMAIL_TO:-(unset - ALLOW_NO_EMAIL, files written only)}"
 echo "Image   : $SIF"
 echo "Python  : $PYTHON_BIN"
 echo "Binds   : ${BINDS[*]+${BINDS[*]}}${BINDS[0]:-(none needed - auto-mounted)}"

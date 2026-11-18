@@ -10,8 +10,10 @@ Looking at the image answers in one glance what no summary statistic does:
 is the arena there, are the landmarks the right colours, is the floor
 textured, is the geometry sane.
 
-Writes to data_cache/render_check/ and emails the lot. Needs EMAIL_TO set;
-without it the files are still written and the send is a silent no-op.
+Writes to data_cache/render_check/ and emails the lot. EMAIL_TO must be set:
+the job script refuses to start without it, and an intended send that fails
+exits non-zero, so an undelivered report shows up as a failed job rather than
+as one line in a log nobody reads. ALLOW_NO_EMAIL=1 writes the files only.
 """
 
 import os
@@ -179,9 +181,24 @@ lines += ['--- timing ---' + grid_note,
 
 body = '\n'.join(lines)
 print(body, flush=True)
-send_email(f'[REALM-VPCE] render check — {MAZE}' + (f' [{TAG}]' if TAG else ''),
-           body, attachments=attachments)
+sent = send_email(f'[REALM-VPCE-RL] render check — {MAZE}' + (f' [{TAG}]' if TAG else ''),
+                  body, attachments=attachments)
 print(f'wrote {len(attachments)} files to {OUT_DIR}', flush=True)
 
+# send_email never raises and returns False on every failure path: EMAIL_TO
+# unset, SMTP unreachable, auth rejected, attachments over budget. That is
+# right for a collection run, whose data stands whether or not the mail got
+# out, but wrong here -- this job's entire product is a picture to look at,
+# so an undelivered report is a failed run and must say so. Exiting non-zero
+# marks it FAILED in sacct and triggers the SLURM --mail-type=FAIL notice,
+# which reaches you even when the report's own SMTP path is what broke.
+#
+# EMAIL_TO unset means the run opted out via ALLOW_NO_EMAIL (the job script
+# gates on it), so there was no delivery to fail.
+wanted = bool(os.environ.get('EMAIL_TO'))
+if wanted and not sent:
+    print('ERROR: the report was not delivered -- see the [report] line above.',
+          flush=True)
+
 # Quit, not reset: reset restarts the controller and this would run forever.
-robot.experiment_supervisor.simulationQuit(0)
+robot.experiment_supervisor.simulationQuit(0 if sent or not wanted else 1)
