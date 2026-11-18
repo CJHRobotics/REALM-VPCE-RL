@@ -26,6 +26,10 @@ See the table in `../README.md` for which script demonstrates which pattern.
 
 Copy it, point it at a new entry point under `analysis/`, and change
 `--mail-user` to your own address — these carry the VPCE paper author's.
+Each also activates `${CONDA_ENV_NAME:-realm-vpce}`, the place-field paper's
+environment; this repo's is `realm-vpce-rl`, so update that default too or
+the job runs against the wrong packages. `_webots_env.sh` already defaults
+correctly, so a job that sources it needs no change.
 Re-check `--time`, `--mem` and `--gres` against what your job actually needs
 rather than inheriting the paper's requests; `../README.md` explains why
 `--mem=128G` silently excludes GPU6.

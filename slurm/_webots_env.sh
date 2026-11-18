@@ -5,8 +5,11 @@
 # before a world is loaded.
 #
 # The container supplies Webots, Xvfb and Mesa. It does NOT supply the Python
-# packages -- those come from the existing `realm-vpce` conda environment,
-# the same one every other job in this directory uses. An earlier version of
+# packages -- those come from a conda environment on the host, built with
+# Python 3.11 to match the image's own interpreter. This repo's environment is
+# `realm-vpce-rl`; the place-field paper's `realm-vpce` is deliberately left
+# alone, so an upgrade here cannot change the environment its results came
+# from. An earlier version of
 # these scripts built a second venv inside the container on the theory that
 # wheels should link against container libraries; in practice that duplicated
 # several GB (torch alone is ~3 GB), filled the home quota, and bought
@@ -18,7 +21,7 @@
 # LAST definition, so both fixes were dead code and the original -- the one
 # they were written to correct -- was the one that actually ran, for weeks.
 
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-realm-vpce}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-realm-vpce-rl}"
 
 resolve_python() {
     if [[ -n "${REALM_PY:-}" ]]; then
@@ -68,11 +71,20 @@ preflight() {
 import sys
 print('  python', sys.version.split()[0], 'at', sys.executable)
 missing = []
-for m in ('numpy', 'pandas', 'h5py', 'cv2', 'matplotlib', 'PIL', 'tqdm'):
+# Collection needs the first group; RL training needs the second. A missing
+# package surfaces from Webots as a controller that exits with no message, so
+# check here where the failure can say what is wrong.
+for m in ('numpy', 'pandas', 'h5py', 'cv2', 'matplotlib', 'PIL', 'tqdm',
+          'torch', 'gymnasium', 'stable_baselines3'):
     try:
         __import__(m)
     except Exception as e:
         missing.append(f'{m} ({e.__class__.__name__})')
+try:
+    import torch
+    print('  torch', torch.__version__, 'cuda', torch.cuda.is_available())
+except Exception:
+    pass
 try:
     import controller                      # Webots bindings, from PYTHONPATH
     print('  controller module OK')
