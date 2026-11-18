@@ -149,9 +149,14 @@ class VisualPlaceCellEnsemble:
     >>> act = ensemble.activate(single_obs)     # (1, K)
     """
 
-    def __init__(self, centers, radii):
+    def __init__(self, centers, radii, channels=None, scales=None):
         self.centers = np.asarray(centers, dtype=np.float64)   # (K, D)
         self.radii   = np.asarray(radii,   dtype=np.float64)   # (K,)
+        # How the feature space was built. Carried so a saved ensemble can be
+        # applied to a NEW observation later -- see `encode`.
+        self.channels = tuple(channels) if channels is not None else None
+        self.scales   = (np.asarray(scales, dtype=np.float64)
+                         if scales is not None else None)
 
     @property
     def n_cells(self):
@@ -160,6 +165,56 @@ class VisualPlaceCellEnsemble:
     @property
     def feature_dim(self):
         return self.centers.shape[1]
+
+    # ----------------------------------------------------------- persistence
+
+    def save(self, filename, method=None, maze=None):
+        """Write the ensemble to an HDF5 file (PlaceCellEnsemble format)."""
+        # Imported here, not at module scope: this module is pure numpy and
+        # gets imported inside Webots controllers, where pulling h5py in for
+        # an ensemble that is only ever constructed in memory is dead weight.
+        from realm_tools.experiment_lib.loggers.place_cell_model import PlaceCellEnsemble
+        model = PlaceCellEnsemble()
+        model.centers, model.radii = self.centers, self.radii
+        model.save(filename, method=method, maze=maze,
+                   channels=self.channels, scales=self.scales)
+        return filename
+
+    @classmethod
+    def load(cls, filename):
+        """Read an ensemble written by `save`, ready to `activate`."""
+        from realm_tools.experiment_lib.loggers.place_cell_model import PlaceCellEnsemble
+        model = PlaceCellEnsemble.load(filename)
+        return cls(model.centers, model.radii,
+                   channels=model.channels, scales=model.scales)
+
+    # ----------------------------------------------------------- new input
+
+    def encode(self, blocks, normalize='row'):
+        """Activations for new observations given their raw feature blocks.
+
+        `blocks` is the dict that `channels.load_channel_blocks` returns, or
+        any mapping of the same block names to (N, d) arrays. The stored
+        channel order and RMS divisors are reapplied, so the result lands in
+        the same space as the centroids.
+
+        This is the method to use on new input. Calling `activate` with a
+        freshly assembled matrix instead silently re-measures the divisors
+        from whatever batch is at hand, which rescales the observation
+        relative to the centroids and quietly corrupts every activation.
+        """
+        from realm_tools.place_cell_lib.channels import assemble
+        if self.channels is None or self.scales is None:
+            raise ValueError(
+                'this ensemble carries no channel configuration, so new input '
+                'cannot be encoded into its feature space. It was saved before '
+                'channels/scales were recorded -- refit it, or assemble the '
+                'features yourself with the original scales and call activate().')
+        X = assemble(blocks, self.channels, scales=self.scales)
+        if X.shape[1] != self.feature_dim:
+            raise ValueError(f'assembled {X.shape[1]} features, '
+                             f'but the ensemble has {self.feature_dim}')
+        return self.activate(X, normalize=normalize)
 
     def activate(self, features, normalize='row'):
         """
