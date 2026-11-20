@@ -12,31 +12,54 @@ turn a new observation into an activation vector.
 
 Fields are built by the rule-governed agglomeration in
 `realm_tools/place_cell_lib/rules.py`: Ward linkage over the feature-space
-distance matrix, then admission by three rules -- the field must fall inside
-the measured size range (Rules 8, 9), be one connected patch of floor
-(Rule 1), and not be ground already claimed by a larger field at the same
-scale (Rule 11). The surviving nodes' feature-space means become the
-ensemble's centers and their feature sigmas become its radii.
+distance matrix, then a single admission rule -- size. A node becomes a cell
+if it holds neither too few nor too many of the sampled locations (Rules 8
+and 9, measured on member count). The surviving nodes' feature-space means
+become the ensemble's centers and their feature sigmas become its radii.
+
+Nothing else filters. Contiguity (Rule 1), competition (Rule 11), tiling
+(Rule 12) and reliability (Rule 2) are all still COMPUTED, and every one of
+them is written to the bank, but none of them rejects anything. That is the
+`size-only` preset and it is the default; `--rules paper` restores the
+paper's funnel for a comparison run.
+
+Why this matters more than it looks. Measuring size on member count instead
+of on the field's footprint is not a change of precision -- members are
+roughly density times area and the two agree closely in practice -- it is a
+change in what the admission decision is allowed to know. The footprint is
+measured by projecting a node's members onto the floor, so selecting on it
+means the library was chosen using ground-truth position; the encoder would
+run on images while the choice of which cells exist did not. Member count
+uses only the global sampling density, so admission is position-free, and
+with the spatial rules off no admission decision anywhere consults a
+position. LAMBDA stays at 0 for the same reason: Rule 4 would put position
+into the merge cost itself.
+
+Scale survives all of this, since later analysis asks how scale affects
+learning. The bank carries `n_members`, `radius_members_m` (the position-free
+scale, and the one admission used), `radius_env_m` and `area_env_m2` (the
+projected measures), plus `scale_band`. `--bands` selects bands, which is the
+single-scale / multiscale knob.
 
 Why not k-means. `clustering.fit_kmeans` is still there and is a reasonable
 baseline, but it needs K chosen in advance and every centroid it produces is
-a cell whether or not it corresponds to anything spatially coherent. The
-agglomeration instead admits cells on evidence, so K is an outcome.
-
-A caveat worth being explicit about, because it bears on what the RL paper
-can claim: admission consults ground-truth position. Rules 1, 8, 9 and 11 all
-ask where on the floor a candidate's members lie, so fitting is spatially
-supervised even though the resulting encoder runs on images alone. LAMBDA
-(Rule 4) goes further and puts position directly into the merge cost, which
-is why it defaults to 0 here and did not in the paper's sweep. Keep it at 0
-unless you mean to make the representation partly positional.
+a cell whether or not anything justifies it. The agglomeration admits cells
+on evidence, so K is an outcome.
 
 Usage
 -----
     python3 analysis/fit_place_fields.py circ_lm8_r10
-    python3 analysis/fit_place_fields.py circ_lm8_r10 --channels visual
-    python3 analysis/fit_place_fields.py circ_lm8_r10 --subsample 8000   # quick
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --bands 3        # one scale
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --bands 2-5      # multiscale
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --scale-m 0.4 1.5
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --channels hog   # one channel
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --subsample 8000 # quick
     python3 analysis/fit_place_fields.py --inspect data/vpce/place_fields/...h5
+
+The three knobs the learning experiment varies -- scale (`--bands`,
+`--scale-m`), multiscale (one band against several) and feature space
+(`--channels`) -- each produce a differently sized observation space from the
+same dataset, which is the point.
 
 Compute: the dominant cost is the N x N feature distance matrix -- about
 3.6 GB and ~5e16 MACs at N = 30,129 for the full configuration. It uses the
@@ -64,6 +87,35 @@ from realm_tools.place_cell_lib.place_cells import VisualPlaceCellEnsemble
 # the same ones the paper's analysis saw.
 LIDAR_MAX_RANGE = 8.0
 LIDAR_SENTINEL = -1.0
+
+# Size is the only rule that rejects anything, and it is measured on how many
+# sampled locations a node holds rather than on the field's footprint, so no
+# admission decision consults a position. Everything else the paper's funnel
+# did is turned off here -- not deleted, so a paper-comparable library is one
+# flag away, and every stage still reports what it WOULD have rejected.
+RULE_PRESETS = {
+    'size-only': dict(
+        SIZE_MEASURE='members',      # Rules 8, 9 on member count
+        FIELD_UNIT='cluster',        # one cell per node, no subfield split
+        CC_FRAC_MIN=0.0,             # Rule 1  off (measured, reported)
+        SAME_SCALE_COMPETITION=False,  # Rule 11 off -- see the note below
+        TILING_FRAC_MIN=0.0,         # Rule 12 off (already the default)
+        SPLIT_HALF_IOU_MIN=None,     # Rule 2  off (already the default)
+    ),
+    # The paper's configuration, for a comparison run.
+    'paper': dict(SIZE_MEASURE='area', FIELD_UNIT='subfield'),
+}
+
+# Dropping Rule 11 has one consequence worth stating. Competition was what
+# stopped a node and its own ancestors from both being admitted; without it,
+# every node in the member-count band is a cell, nested ones included, and a
+# parent's members are a superset of its child's. Those cells are correlated
+# by construction. For a multiscale representation that is the point -- it is
+# how the same place gets described at several scales at once. For a
+# single-scale run it is not, and the lever is band width: --bands selects
+# geometric scale bands, and a narrow selection excludes a node's direct
+# ancestors because a parent sits at least BAND_RATIO times its child's
+# radius. The fit reports the redundancy either way.
 
 
 def inspect(path):
@@ -104,6 +156,18 @@ def main():
     ap.add_argument('--channels', default='visual',
                     help=f'channel set: {", ".join(ch.CHANNEL_SETS)} '
                          '(default: visual = hog + color_hist + spatial)')
+    ap.add_argument('--rules', default='size-only', choices=sorted(RULE_PRESETS),
+                    help='admission rules (default: size-only -- size is the '
+                         'only rule that rejects, measured on member count)')
+    ap.add_argument('--scale-m', nargs=2, type=float, metavar=('LO', 'HI'),
+                    default=None,
+                    help='admit only fields whose implied radius is in this '
+                         'range, in metres; converted to a member count via '
+                         'the arena sampling density')
+    ap.add_argument('--bands', default=None, metavar='SPEC',
+                    help='keep only these geometric scale bands, e.g. "3" for '
+                         'a single-scale ensemble or "1-4" for multiscale '
+                         '(default: every admitted band)')
     ap.add_argument('--lam', type=float, default=0.0,
                     help='Rule 4 spatial weight; 0 keeps merging purely '
                          'feature-driven (default: 0)')
@@ -203,8 +267,21 @@ def main():
     feat_med = R._median_offdiag(D2_feat, rng)
     print(f'  median feature d^2: {feat_med:.4g}')
 
-    cfg = dict(LAMBDA=args.lam, BIN_M=args.bin_m, RANDOM_SEED=args.seed,
+    cfg = dict(RULE_PRESETS[args.rules])
+    cfg.update(LAMBDA=args.lam, BIN_M=args.bin_m, RANDOM_SEED=args.seed,
                USE_GPU=not args.no_gpu)
+    if args.scale_m:
+        # Stated in metres because that is the unit the scale question is
+        # asked in, converted to the area fractions the rules hold, and from
+        # there to a member count by the arena's mean density. The decision
+        # still only ever compares counts.
+        lo, hi = sorted(args.scale_m)
+        cfg['RULE8_AREA_FRAC'] = float(np.pi * lo ** 2 / env['env_area'])
+        cfg['RULE9_AREA_FRAC'] = float(np.pi * hi ** 2 / env['env_area'])
+        print(f'  size window: r in [{lo:g}, {hi:g}] m')
+    print(f'  rules: {args.rules}  (size measured on '
+          f'{cfg.get("SIZE_MEASURE", "area")})')
+
     bank_df, kept_mu, report = R.build_bank(
         X, xy, env, D2_feat, feat_med, xy_med, cfg=cfg, device=device,
         tag=f'{args.arena}/{args.channels}')
@@ -215,6 +292,28 @@ def main():
               'channel with no\n  spatial locality (check median_sigma_ratio '
               'near 1) is the usual cause.', file=sys.stderr)
         return 1
+
+    # Band selection: the single-scale / multiscale knob. Applied after
+    # admission rather than inside it, so the funnel still reports what the
+    # rules did and only the ensemble is narrowed.
+    if args.bands:
+        want = set()
+        for part in args.bands.split(','):
+            if '-' in part.strip():
+                a, b = part.split('-')
+                want.update(range(int(a), int(b) + 1))
+            else:
+                want.add(int(part))
+        mask = bank_df['scale_band'].isin(want).to_numpy()
+        if not mask.any():
+            present = sorted(bank_df['scale_band'].unique())
+            print(f'ERROR: no admitted field is in band(s) {sorted(want)}; '
+                  f'this fit produced bands {present}', file=sys.stderr)
+            return 1
+        print(f'  bands {sorted(want)}: keeping {int(mask.sum())} of '
+              f'{len(bank_df)} fields')
+        bank_df = bank_df[mask].reset_index(drop=True)
+        kept_mu = kept_mu[mask]
 
     # --------------------------------------------------------------- save
     # The admitted nodes' feature-space means are the cell centres; their
@@ -281,6 +380,39 @@ def main():
         print(f'  coverage    : {cov:.1%} of the floor')
     print(f'  multifield  : {int(bank_df["multifield"].sum())} cells with '
           f'two or more lobes')
+
+    # Scale, reported on both measures, because later analysis asks how scale
+    # affects learning and the two are not interchangeable: radius_members_m
+    # is what admission used and is position-free, radius_env_m is measured
+    # through the floor projection. Both are in the bank.
+    if 'radius_members_m' in bank_df:
+        rm = bank_df['radius_members_m']
+        print(f'  scale (members) : r = {rm.min():.3g} .. {rm.max():.3g} m  '
+              f'(median {rm.median():.3g})')
+    print(f'  scale (projected): r = {bank_df["radius_env_m"].min():.3g} .. '
+          f'{bank_df["radius_env_m"].max():.3g} m')
+    counts = bank_df['scale_band'].value_counts().sort_index()
+    print('  cells per band  : ' + '  '.join(
+        f'B{b}={n}' for b, n in counts.items()))
+
+    # How much of the observation space is redundant. With Rule 11 off a node
+    # and its ancestors can both be cells, and a parent's members include its
+    # child's, so some columns move together by construction. This is the
+    # number that matters for an RL state space -- correlated inputs are
+    # survivable where exact duplicates are not -- so report it rather than
+    # filtering on it.
+    act_fit = ensemble.activate(X, normalize=None)
+    keepcol = act_fit.std(axis=0) > 0
+    if keepcol.sum() > 1:
+        C_abs = np.abs(np.corrcoef(act_fit[:, keepcol], rowvar=False))
+        np.fill_diagonal(C_abs, 0.0)
+        print(f'  cell correlation: median {np.median(C_abs):.3f}  '
+              f'max {C_abs.max():.3f}  '
+              f'pairs > 0.99: {int((C_abs > 0.99).sum() // 2)}')
+    if int((~keepcol).sum()):
+        print(f'  WARNING: {int((~keepcol).sum())} cells never vary across '
+              f'the fitted data -- dead inputs for an agent')
+
     print(f'\n  ensemble -> {out_path}')
     print(f'  bank     -> {bank_path}')
     print(f'  total: {time.time()-t0:.1f}s')

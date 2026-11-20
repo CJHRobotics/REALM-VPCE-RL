@@ -226,6 +226,30 @@ DEFAULT_CFG = dict(
     # run_scale_distribution.rules_tag).
     FIELD_UNIT       = 'subfield',
 
+    # --- what "too small" and "too large" are measured ON -----------------
+    # 'area'    the field's projected footprint on the floor, in m^2. This is
+    #           what the paper used, and it is the right measure when the
+    #           question is how large place fields ARE.
+    # 'members' how many sampled locations the node holds. Equivalent in
+    #           intent -- members ~ density * area -- but computed from the
+    #           dendrogram alone.
+    #
+    # The difference is not precision, it is what the admission decision is
+    # allowed to know. 'area' reaches through the environment readout to where
+    # each member lies on the floor, so a library admitted that way was
+    # selected using ground-truth position. For a representation whose claim
+    # is that it needs no position that is a problem: the encoder runs on
+    # images, but the choice of WHICH cells exist did not.
+    #
+    # 'members' uses only the global density (N / arena area), never any
+    # individual position, so admission carries no spatial supervision. The
+    # spatial measures are still computed and still written to the bank --
+    # area, equivalent radius, elongation, centroid, distance to wall -- they
+    # just no longer decide anything. Measuring is not the same as filtering,
+    # which is the distinction this module already draws for Rule 12 and for
+    # distance-to-the-wall.
+    SIZE_MEASURE     = 'area',
+
     # --- Rule 1 (FIELD_UNIT='cluster' only) -------------------------------
     CC_FRAC_MIN      = 0.80,       # largest connected component / mask area
 
@@ -1034,8 +1058,16 @@ def prepare_candidates(X, xy, env, D2_feat, feat_med, xy_med, cfg=None,
     # density * area_min locations; require at least half of that so the
     # size rules, not the member count, do the actual work.
     density = N / env['env_area']
-    min_members = max(8, int(0.5 * density * area_min))
-    max_members = int(2.0 * density * area_max)
+    if C['SIZE_MEASURE'] == 'members':
+        # No longer a prefilter with slack: under SIZE_MEASURE='members' this
+        # IS Rules 8 and 9, so the bounds are the size bounds exactly. The 8
+        # floor stays -- sigma over fewer than a handful of members is noise,
+        # whatever the arena.
+        min_members = max(8, int(round(density * area_min)))
+        max_members = int(round(density * area_max))
+    else:
+        min_members = max(8, int(0.5 * density * area_min))
+        max_members = int(2.0 * density * area_max)
     cand = np.flatnonzero((count >= min_members) & (count <= max_members))
     if verbose:
         print(f'[{tag}] candidates: {len(cand)} / {2*N-1} nodes '
@@ -1161,7 +1193,20 @@ def admit_fields(ctx, cfg=None, verbose=True):
     # --- funnel -----------------------------------------------------------
     funnel = [('candidates', n_cand)]
 
-    pass_size = (area >= area_min) & (area <= area_max)                # Rules 8, 9
+    # Members per candidate field, and the radius a field of that many
+    # members would have at the arena's mean sampling density. Both are
+    # position-free: density is N / arena area, a single global constant.
+    density = N / env['env_area']
+    n_mem = count[cand[clu]].astype(np.float64)
+    r_mem = np.sqrt(n_mem / max(density * np.pi, 1e-12))
+
+    if C['SIZE_MEASURE'] == 'members':
+        pass_size = (n_mem >= min_members) & (n_mem <= max_members)
+    elif C['SIZE_MEASURE'] == 'area':
+        pass_size = (area >= area_min) & (area <= area_max)            # Rules 8, 9
+    else:
+        raise ValueError(f"SIZE_MEASURE must be 'area' or 'members', "
+                         f"not {C['SIZE_MEASURE']!r}")
     funnel.append(('rule_8_9_size', int(pass_size.sum())))
 
     if C['FIELD_UNIT'] == 'subfield':
@@ -1207,7 +1252,12 @@ def admit_fields(ctx, cfg=None, verbose=True):
 
     surviving = np.flatnonzero(pass_rel)
     r_mean = 0.5 * (a_ax + b_ax)
-    band = assign_bands(r_eq, r_min, C['BAND_RATIO'])
+    # Scale bands follow whatever size is measured on, so that under
+    # SIZE_MEASURE='members' the grouping is position-free too -- otherwise
+    # admission would be clean and the scale label it is reported under
+    # would not be.
+    band = assign_bands(r_mem if C['SIZE_MEASURE'] == 'members' else r_eq,
+                        r_min, C['BAND_RATIO'])
 
     # Rule 11 — larger and more reliable fields claim their territory first.
     order = surviving[np.lexsort((-sh_iou[surviving], -r_eq[surviving]))]
@@ -1242,6 +1292,12 @@ def admit_fields(ctx, cfg=None, verbose=True):
             n_subfields=int(n_sub[k]),
             depth=int(depth[nid]), n_members=int(count[nid]),
             sigma_feature=float(cand_sigma[clu[k]]),
+            # The position-free scale: the radius this member count implies
+            # at the arena's mean density. Under SIZE_MEASURE='members' this
+            # is the quantity admission actually used, so analysis asking how
+            # scale affects anything should prefer it to radius_env_m, which
+            # is measured through the floor projection.
+            radius_members_m=float(r_mem[k]),
             area_env_m2=float(area[k]), radius_env_m=float(r_eq[k]),
             semi_major_m=float(a_ax[k]), semi_minor_m=float(b_ax[k]),
             elongation=float(elong[k]), orientation_rad=float(theta[k]),
@@ -1256,7 +1312,7 @@ def admit_fields(ctx, cfg=None, verbose=True):
     # well-formed, readable bank.csv with headers rather than an empty file.
     BANK_COLUMNS = ['node_id', 'subfield_id', 'n_subfields',
                     'n_selected_subfields', 'multifield',
-                    'depth', 'n_members', 'sigma_feature',
+                    'depth', 'n_members', 'sigma_feature', 'radius_members_m',
                     'area_env_m2', 'radius_env_m', 'semi_major_m', 'semi_minor_m',
                     'elongation', 'orientation_rad', 'centroid_x', 'centroid_y',
                     'dist_to_wall_m', 'scale_band', 'cc_frac', 'n_components',
