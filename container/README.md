@@ -280,7 +280,8 @@ said all of the following was outstanding:
   training job, or a missing one surfaces as a controller that exits with no
   useful message.
 - **RL: extern controllers.** The `WebotsEnv` skeleton in
-  `realm_tools/simulation_lib/webots_torch_environment.py` is still empty.
+  `realm_tools/rl_lib/webots_env.py` is implemented; it has not yet run
+  inside the container.
   Build it **extern-controller-first** (`WEBOTS_CONTROLLER_URL` +
   `webots-controller`), so the training script is the parent process and
   Webots is a subprocess it manages. That inversion is what allows SB3

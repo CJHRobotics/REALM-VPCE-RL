@@ -48,24 +48,27 @@ The place-field analysis that produced the VPCE paper's figures and numbers is
 
 ## Where the RL work starts
 
-Three things need writing, roughly in this order:
+The pipeline runs end to end. Four stages, each a SLURM job:
 
-1. **`realm_tools/simulation_lib/webots_torch_environment.py`** — `WebotsEnv`
-   is a Gymnasium skeleton with stubbed `reset`/`step` and placeholder spaces.
-   This is the main piece of new work: wire the HamBot supervisor in, define
-   the action set, and make the observation a VPCE activation vector from a
-   fitted `VisualPlaceCellEnsemble`.
-2. **A training entry point under `analysis/`** — `stable-baselines3` and
-   `gymnasium` are already in `setup/requirements.txt`.
-3. **A GAIVI job for it under `slurm/`** — build on the headers in
-   `slurm/vpce_paper_jobs/`; they encode node choices that took real
-   debugging to find.
+| stage | job | produces |
+|---|---|---|
+| collect | `slurm/collect_data.sh <arena>` | `data/vpce/collect_data/<arena>.h5` |
+| fit fields | `slurm/fit_place_fields.sh <arena>` | an ensemble + the field maps |
+| train | `slurm/train_rl.sh <arena>` | a policy + the learning curve |
+| compare | *still to write* | learning time against representation |
 
-An open design question worth settling early: whether the ensemble is **fitted
-once** from a collected dataset and then frozen as a fixed encoder, or
-**refitted** as the agent explores. The frozen path reuses the existing
-collection pipeline unchanged and is the cheaper experiment; the online path is
-the more interesting claim.
+The ensemble is **fitted once and frozen** as an encoder. Refitting it online
+as the agent explores is the more interesting claim and remains open, but the
+frozen path is what every current measurement assumes.
+
+The agent observes the simulator and nothing else: every step captures eight
+camera frames at the robot's position, builds the same descriptors the
+dataset was built from, and encodes them through the ensemble. No pose, no
+goal bearing, no lookup from the collected grid.
+
+Still to write: the sweep that varies scale, multiscale and feature space
+across seeds, and the analysis that turns the Monitor CSVs into
+learning-time-against-representation.
 
 ---
 
@@ -163,7 +166,7 @@ REALM-VPCE-RL/
 │   │   ├── environment.py        # Environment class and environment objects
 │   │   ├── environment_parser.py # XML arena file parser
 │   │   ├── start_position_generator.py  # Position grids for collection
-│   │   └── webots_torch_environment.py  # Gymnasium env skeleton — START HERE
+│   │   └── (robot and arena plumbing)
 │   ├── image_lib/
 │   │   ├── feature_extractor.py  # ResNet50 + HOG feature extraction
 │   │   ├── image_feature_lib.py  # Image processing utilities
@@ -200,9 +203,8 @@ REALM-VPCE-RL/
 
 1. **Robot logic** — subclass `HamBot` in `my_robot.py` and add
    experiment-specific methods (action sets, observation processing, etc.)
-2. **Environment** — fill in the `WebotsEnv` skeleton in
-   `webots_torch_environment.py` with your observation space, reward
-   function, and episode logic
+2. **Environment** — `rl_lib/webots_env.py` holds `WebotsEnv`; reward lives
+   in `RewardConfig` and the observation in `rl_lib/vpce_observer.py`
 3. **Controllers** — add new Webots controllers under
    `simulation/controllers/` then re-run `add_runtime_ini.py`
 4. **Personal files** — your personal robot subclass (e.g.

@@ -26,7 +26,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from realm_tools.simulation_lib.webots_torch_environment import (
+from realm_tools.rl_lib import (
     WebotsEnv, RewardConfig, N_ACTIONS, action_masks)
 
 ACTION_LENGTH = 0.5

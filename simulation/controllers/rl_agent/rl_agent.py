@@ -6,7 +6,7 @@ from Gymnasium and it is enough for one environment at a time, which is what
 a first set of learning curves needs. Vectorised training over several
 simulators needs the extern-controller route instead -- the environment
 itself is unchanged, only the launching differs. See the module docstring of
-realm_tools/simulation_lib/webots_torch_environment.py.
+realm_tools/rl_lib/webots_env.py.
 
 Configured by environment variables, so a SLURM job can sweep conditions
 without editing anything. They are read once, at the top, and echoed:
@@ -16,7 +16,7 @@ without editing anything. They are read once, at the top, and echoed:
                       (data/vpce/place_fields/<maze>_visual.h5)
     REALM_TIMESTEPS   training steps                 (100000)
     REALM_MAX_STEPS   steps per episode              (200)
-    REALM_ALGO        PPO or DQN                     (PPO)
+    REALM_ALGO        DQN or PPO                     (DQN)
     REALM_TELEPORT    1 teleports actions, 0 drives  (1)
     REALM_SHAPING     potential-based distance shaping weight (0 = sparse)
     REALM_SEED        random seed                    (0)
@@ -48,16 +48,15 @@ print(f"repo root: {REPO}", flush=True)
 import numpy as np
 
 from realm_tools.robot_lib.my_robot import MyRobot
-from realm_tools.simulation_lib.vpce_observer import VpceObserver
-from realm_tools.simulation_lib.webots_torch_environment import (
-    WebotsEnv, RewardConfig)
+from realm_tools.rl_lib import VpceObserver, WebotsEnv, RewardConfig
+from realm_tools.rl_lib.agents import make_agent, algo_kwargs
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r10')
 ENSEMBLE = os.environ.get(
     'REALM_ENSEMBLE', f'data/vpce/place_fields/{MAZE}_visual.h5')
 TIMESTEPS = int(os.environ.get('REALM_TIMESTEPS', 100_000))
 MAX_STEPS = int(os.environ.get('REALM_MAX_STEPS', 200))
-ALGO = os.environ.get('REALM_ALGO', 'PPO').upper()
+ALGO = os.environ.get('REALM_ALGO', 'DQN').upper()
 TELEPORT = os.environ.get('REALM_TELEPORT', '1') == '1'
 SHAPING = float(os.environ.get('REALM_SHAPING', 0.0))
 SEED = int(os.environ.get('REALM_SEED', 0))
@@ -109,7 +108,6 @@ env = WebotsEnv(
     reward=RewardConfig(shaping=SHAPING),
 )
 
-from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.monitor import Monitor
 
 # Monitor writes the per-episode reward and length CSV. That file IS the
@@ -119,9 +117,8 @@ env = Monitor(env, filename=f'{OUT_DIR}/monitor.csv',
               info_keywords=('is_success',))
 
 MODEL_PATH = f'{OUT_DIR}/model.zip'
-Algo = {'PPO': PPO, 'DQN': DQN}.get(ALGO)
-if Algo is None:
-    print(f'ERROR: REALM_ALGO must be PPO or DQN, not {ALGO!r}',
+if ALGO not in ('DQN', 'PPO'):
+    print(f'ERROR: REALM_ALGO must be DQN or PPO, not {ALGO!r}',
           file=sys.stderr, flush=True)
     sys.exit(1)
 
@@ -130,7 +127,10 @@ with open(f'{OUT_DIR}/config.json', 'w') as f:
                    channels=list(observer.channels), algo=ALGO,
                    timesteps=TIMESTEPS, max_steps=MAX_STEPS,
                    teleport=TELEPORT, shaping=SHAPING, seed=SEED,
-                   tag=TAG), f, indent=2)
+                   tag=TAG,
+                   # Recorded so a run can be reproduced, and so a sweep
+                   # can be checked for having held them constant.
+                   hyperparameters=algo_kwargs(ALGO)), f, indent=2)
 
 
 def evaluate(model, n_episodes=20):
@@ -156,11 +156,12 @@ if EVAL_ONLY:
     if not os.path.exists(MODEL_PATH):
         print(f'ERROR: no model at {MODEL_PATH}', file=sys.stderr, flush=True)
         sys.exit(1)
-    model = Algo.load(MODEL_PATH, env=env)
+    from stable_baselines3 import PPO, DQN
+    model = {'DQN': DQN, 'PPO': PPO}[ALGO].load(MODEL_PATH, env=env)
     rate, mean_len = evaluate(model)
     print(f'eval: success {rate:.0%}  mean steps {mean_len:.1f}', flush=True)
 else:
-    model = Algo('MlpPolicy', env, verbose=1, seed=SEED)
+    model = make_agent(ALGO, env, seed=SEED, verbose=1)
 
     # Before training, so the learning curve has a baseline. An untrained
     # policy that already solves the task would mean the task is trivial,
@@ -175,10 +176,30 @@ else:
     rate1, len1 = evaluate(model)
     print(f'after training : success {rate1:.0%}  mean steps {len1:.1f}',
           flush=True)
+    result = dict(success_before=rate0, success_after=rate1,
+                  steps_before=len0, steps_after=len1,
+                  wall_seconds=time.time() - t0)
+
+    # The learning curve. Wrapped, because the model and the Monitor CSV are
+    # already on disk at this point and a matplotlib failure must not lose a
+    # run that cost hours of rendering.
+    try:
+        from realm_tools.rl_lib import learning_curve
+        png, summary = learning_curve.plot(
+            f'{OUT_DIR}/monitor.csv', f'{OUT_DIR}/learning_curve.png',
+            title=f'{TAG} | {MAZE} | {ALGO} | {observer.n_cells} cells')
+        result['curve'] = summary
+        print('\nlearning curve:', flush=True)
+        for line in learning_curve.summarise(summary):
+            print(line, flush=True)
+        if png:
+            print(f'  figure -> {png}', flush=True)
+    except Exception as exc:                                # noqa: BLE001
+        print(f'  WARNING: learning curve failed '
+              f'({exc.__class__.__name__}: {exc})', flush=True)
+
     with open(f'{OUT_DIR}/result.json', 'w') as f:
-        json.dump(dict(success_before=rate0, success_after=rate1,
-                       steps_before=len0, steps_after=len1,
-                       wall_seconds=time.time() - t0), f, indent=2)
+        json.dump(result, f, indent=2)
 
 print(f'done in {time.time() - t0:.0f}s  ->  {OUT_DIR}', flush=True)
 

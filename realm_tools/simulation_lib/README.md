@@ -12,7 +12,7 @@ environments defined in XML.
 | `environment_parser.py` | Parses a maze XML file into plain Python dicts |
 | `environment.py` | Converts parsed data into typed objects (`Wall`, `Landmark`, `StartingPosition`, etc.) and produces Webots node strings |
 | `start_position_generator.py` | Generates a uniform grid of valid robot start positions from a maze XML and saves them to CSV |
-| `webots_torch_environment.py` | Gymnasium environment skeleton for RL agents |
+| *(RL moved)* | `WebotsEnv` now lives in `realm_tools/rl_lib/` |
 
 ---
 

@@ -153,10 +153,10 @@ class MyRobot(HamBot): ...
 
 ## Gymnasium Environment
 
-`simulation_lib/webots_torch_environment.py` provides a `WebotsEnv` skeleton that follows the [Gymnasium API](https://gymnasium.farama.org/api/env/) and is compatible with [Stable-Baselines3](https://stable-baselines3.readthedocs.io/).
+`rl_lib/webots_env.py` provides `WebotsEnv`, a navigation task following the [Gymnasium API](https://gymnasium.farama.org/api/env/) and usable directly with [Stable-Baselines3](https://stable-baselines3.readthedocs.io/). It observes through `rl_lib/vpce_observer.py`, which encodes what the robot sees into place-cell activations. The env takes an already-connected robot, so the task can be exercised without Webots — see `tests/test_webots_env.py`.
 
 ```python
-from realm_tools.simulation_lib.webots_torch_environment import WebotsEnv
+from realm_tools.rl_lib import WebotsEnv, VpceObserver
 
 env = WebotsEnv(max_steps_per_episode=200)
 obs, info = env.reset()
