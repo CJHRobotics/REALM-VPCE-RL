@@ -24,17 +24,21 @@ def add_runtime_ini_to_dirs(controllers_dir, python_venv_path):
         raise FileNotFoundError(f"controllers directory not found: {controllers_dir}")
 
     written = 0
-    for dirpath, dirnames, _ in os.walk(controllers_dir):
-        for dirname in dirnames:
-            dir_full_path = os.path.join(dirpath, dirname)
-            runtime_ini_file = os.path.join(dir_full_path, "runtime.ini")
+    # Immediate children only, not os.walk. Webots reads runtime.ini from the
+    # controller's own directory, and a recursive walk wrote one into every
+    # nested directory too -- including __pycache__, as soon as anything had
+    # imported the controller. Those files are junk at best.
+    for entry in sorted(os.scandir(controllers_dir), key=lambda e: e.name):
+        if not entry.is_dir() or entry.name.startswith(('.', '__')):
+            continue
+        runtime_ini_file = os.path.join(entry.path, "runtime.ini")
 
-            with open(runtime_ini_file, "w") as out_file:
-                out_file.write("[python]\n")
-                out_file.write(f"COMMAND = {python_venv_path}")
+        with open(runtime_ini_file, "w") as out_file:
+            out_file.write("[python]\n")
+            out_file.write(f"COMMAND = {python_venv_path}")
 
-            print(f"Added runtime.ini to {dir_full_path}")
-            written += 1
+        print(f"Added runtime.ini to {entry.path}")
+        written += 1
 
     if written == 0:
         raise RuntimeError(f"no controller directories under {controllers_dir}")
