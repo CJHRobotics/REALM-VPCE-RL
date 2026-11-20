@@ -35,8 +35,23 @@
               texture="../protos/world_objects/textures/flags/flag_7.png"
               red="0.00" green="0.50" blue="0.50"/>
 
+    <!-- Six episode starts, 60 deg apart, alternating r = 8 and r = 5 so they
+         differ in distance to the goal as well as in bearing. The goal is at
+         the origin, so each is a different length of journey inward and sees
+         a different pair of landmarks ahead.
+
+         theta is cosmetic here: the VPCE observation spans all eight headings
+         so it does not depend on facing, and the action set is allocentric
+         (action k is always world bearing 45k deg), so the starting heading
+         changes neither what the agent sees nor what its actions mean. They
+         face the centre because it reads better in the path plots. -->
     <train_start_positions>
-        <pos x="0.0" y="0.0" theta="0.0"/>
+        <pos x="  8.0000" y="  0.0000" theta="-3.1416"/>   <!--   0 deg, r = 8.0 m -->
+        <pos x="  2.5000" y="  4.3301" theta="-2.0944"/>   <!--  60 deg, r = 5.0 m -->
+        <pos x=" -4.0000" y="  6.9282" theta="-1.0472"/>   <!-- 120 deg, r = 8.0 m -->
+        <pos x=" -5.0000" y="  0.0000" theta="-0.0000"/>   <!-- 180 deg, r = 5.0 m -->
+        <pos x=" -4.0000" y=" -6.9282" theta=" 1.0472"/>   <!-- 240 deg, r = 8.0 m -->
+        <pos x="  2.5000" y=" -4.3301" theta=" 2.0944"/>   <!-- 300 deg, r = 5.0 m -->
     </train_start_positions>
 
     <test_start_positions>

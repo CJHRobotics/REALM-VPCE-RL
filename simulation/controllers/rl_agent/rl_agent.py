@@ -22,6 +22,8 @@ without editing anything. They are read once, at the top, and echoed:
     REALM_SEED        random seed                    (0)
     REALM_RUN_TAG     names the output directory     (derived)
     REALM_EVAL_ONLY   1 to load the saved model and only evaluate
+    REALM_STOP_AT     success rate counting as converged       (0.8)
+    REALM_MAX_EPISODES give up after this many episodes        (unlimited)
 
 Output goes to data/vpce/rl_runs/<tag>/: the SB3 model, the Monitor CSV of
 per-episode reward and length -- which is the learning curve, and so the
@@ -50,6 +52,7 @@ import numpy as np
 from realm_tools.robot_lib.my_robot import MyRobot
 from realm_tools.rl_lib import VpceObserver, WebotsEnv, RewardConfig
 from realm_tools.rl_lib.agents import make_agent, algo_kwargs
+from realm_tools.rl_lib.callbacks import ConvergenceStopper
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r10')
 ENSEMBLE = os.environ.get(
@@ -61,6 +64,8 @@ TELEPORT = os.environ.get('REALM_TELEPORT', '1') == '1'
 SHAPING = float(os.environ.get('REALM_SHAPING', 0.0))
 SEED = int(os.environ.get('REALM_SEED', 0))
 EVAL_ONLY = os.environ.get('REALM_EVAL_ONLY', '0') == '1'
+STOP_AT = float(os.environ.get('REALM_STOP_AT', 0.8))
+MAX_EPISODES = int(os.environ.get('REALM_MAX_EPISODES', 0)) or None
 TAG = os.environ.get(
     'REALM_RUN_TAG',
     f'{MAZE}_{ALGO.lower()}_s{SEED}' + ('_shaped' if SHAPING else ''))
@@ -133,22 +138,53 @@ with open(f'{OUT_DIR}/config.json', 'w') as f:
                    hyperparameters=algo_kwargs(ALGO)), f, indent=2)
 
 
+def rollout(model, start_index=None):
+    """One deterministic episode. Returns (reached, steps)."""
+    options = None if start_index is None else {'start_index': start_index}
+    obs, _ = env.reset(options=options)
+    done = term = False
+    steps = 0
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, _r, term, trunc, _info = env.step(int(action))
+        steps += 1
+        done = term or trunc
+    return bool(term), steps
+
+
 def evaluate(model, n_episodes=20):
-    """Deterministic rollouts: success rate and steps to goal."""
+    """Deterministic rollouts from random starts: success rate and length."""
     wins, lengths = 0, []
-    for i in range(n_episodes):
-        obs, _ = env.reset()
-        done = False
-        steps = 0
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, _r, term, trunc, _info = env.step(int(action))
-            steps += 1
-            done = term or trunc
-        if term:
+    for _ in range(n_episodes):
+        reached, steps = rollout(model)
+        if reached:
             wins += 1
             lengths.append(steps)
     return wins / n_episodes, (float(np.mean(lengths)) if lengths else float('nan'))
+
+
+def rollout_every_start(model):
+    """One deterministic episode from each start, for the path figure.
+
+    Deliberately deterministic and one per start, rather than reusing
+    whatever the last training episodes happened to be. Training episodes
+    are epsilon-greedy, so their paths contain random actions and show the
+    exploration rather than the policy; and with starts sampled at random
+    the last episode from a given start can be thousands of steps stale.
+    Six fresh rollouts cost six episodes of rendering and show what the
+    trained policy actually does from each place.
+    """
+    n = env.unwrapped.n_starts()
+    if n <= 0:
+        print('  arena defines no start positions; skipping the path figure',
+              flush=True)
+        return {}
+    env.unwrapped.last_paths.clear()
+    for i in range(n):
+        reached, steps = rollout(model, start_index=i)
+        print(f'  start {i}: {"reached" if reached else "timed out"} '
+              f'in {steps} steps', flush=True)
+    return dict(env.unwrapped.last_paths)
 
 
 t0 = time.time()
@@ -170,15 +206,59 @@ else:
     print(f'before training: success {rate0:.0%}  mean steps {len0:.1f}',
           flush=True)
 
-    model.learn(total_timesteps=TIMESTEPS, progress_bar=False)
+    def verify_deterministic():
+        """Fraction of starts the greedy policy actually solves.
+
+        Costs one episode per start, and is only called when training
+        already looks converged -- cheap against the alternative of
+        stopping on a policy that cycles in place under argmax.
+        """
+        n = env.unwrapped.n_starts()
+        if n <= 0:
+            return 1.0
+        return sum(rollout(model, start_index=i)[0] for i in range(n)) / n
+
+    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES,
+                                 verify=verify_deterministic)
+    model.learn(total_timesteps=TIMESTEPS, progress_bar=False,
+                callback=stopper)
     model.save(MODEL_PATH)
+    stop = stopper.summary()
+    print(f'\ntraining ended: {stop["stop_reason"]} after {stop["episodes"]} '
+          f'episodes ({stop["final_success_rate"]:.0%} success over the last '
+          f'{stop["window"]})', flush=True)
 
     rate1, len1 = evaluate(model)
     print(f'after training : success {rate1:.0%}  mean steps {len1:.1f}',
           flush=True)
     result = dict(success_before=rate0, success_after=rate1,
                   steps_before=len0, steps_after=len1,
-                  wall_seconds=time.time() - t0)
+                  wall_seconds=time.time() - t0, **stop)
+
+    # The path figure, drawn whether the run converged or gave up -- a
+    # failure has a shape, and the shape is the diagnostic.
+    print('\nfinal paths, one deterministic episode per start:', flush=True)
+    try:
+        import xml.etree.ElementTree as ET
+        from realm_tools.rl_lib import path_plots
+        paths = rollout_every_start(model)
+        if paths:
+            xml_root = ET.parse(
+                f'simulation/worlds/environments/vpce/{MAZE}.xml').getroot()
+            gx, gy = robot.maze.get_goal_location()
+            png, psum = path_plots.plot_paths(
+                paths, xml_root, f'{OUT_DIR}/final_paths.png',
+                goal=(gx, gy),
+                title=f'{TAG} | {stop["stop_reason"]} after '
+                      f'{stop["episodes"]} episodes')
+            result['paths'] = psum
+            for line in path_plots.summarise(psum):
+                print(line, flush=True)
+            if png:
+                print(f'  figure -> {png}', flush=True)
+    except Exception as exc:                                # noqa: BLE001
+        print(f'  WARNING: path figure failed '
+              f'({exc.__class__.__name__}: {exc})', flush=True)
 
     # The learning curve. Wrapped, because the model and the Monitor CSV are
     # already on disk at this point and a matplotlib failure must not lose a

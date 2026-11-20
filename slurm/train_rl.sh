@@ -14,6 +14,14 @@
 #   sbatch slurm/train_rl.sh circ_lm8_r10
 #   REALM_TIMESTEPS=200000 sbatch slurm/train_rl.sh circ_lm8_r10
 #   REALM_ALGO=PPO REALM_SEED=1 sbatch slurm/train_rl.sh circ_lm8_r10
+#   REALM_MAX_EPISODES=3000 sbatch slurm/train_rl.sh circ_lm8_r10
+#
+# Training stops early on convergence (REALM_STOP_AT, default 0.8 success
+# over the last 100 episodes) or gives up after REALM_MAX_EPISODES. Either
+# way it then runs one deterministic episode from each of the arena's start
+# positions and draws final_paths.png -- the routes the policy actually
+# takes. A failure has a shape, so that figure is drawn whether the run
+# converged or not.
 #
 # Everything is configured through the environment; the controller reads it
 # and echoes it. See simulation/controllers/rl_agent/rl_agent.py.
@@ -120,6 +128,7 @@ echo "Arena   : $ARENA"
 echo "Ensemble: $ENSEMBLE"
 echo "Run tag : $TAG   ->  $OUT_DIR"
 echo "Algo    : ${REALM_ALGO:-DQN}   steps=${REALM_TIMESTEPS:-100000}  seed=${REALM_SEED:-0}"
+echo "Stop at : ${REALM_STOP_AT:-0.8} success   give up after ${REALM_MAX_EPISODES:-0} episodes (0 = no limit)"
 echo "Teleport: ${REALM_TELEPORT:-1}   shaping=${REALM_SHAPING:-0}"
 echo "Image   : $SIF"
 echo "Python  : $PYTHON_BIN"
@@ -155,6 +164,8 @@ set +e
     --env REALM_SHAPING="${REALM_SHAPING:-0}" \
     --env REALM_SEED="${REALM_SEED:-0}" \
     --env REALM_EVAL_ONLY="${REALM_EVAL_ONLY:-0}" \
+    --env REALM_STOP_AT="${REALM_STOP_AT:-0.8}" \
+    --env REALM_MAX_EPISODES="${REALM_MAX_EPISODES:-0}" \
     --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \
     xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" \

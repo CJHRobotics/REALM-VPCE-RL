@@ -133,7 +133,31 @@ class WebotsEnv(gym.Env):
         self.current_step = 0
         self._prev_dist = None
 
+        # Trajectory recording. The pose is already read every step for
+        # `info`, so keeping the path costs nothing beyond the list. Paths
+        # are what the final figure is made of: where the agent actually
+        # went, from each start, which a learning curve cannot show.
+        self.start_idx = -1
+        self._path = []
+        self._ep_reward = 0.0
+        # start index -> the most recent completed episode from that start.
+        self.last_paths = {}
+
     # ------------------------------------------------------------- helpers
+
+    def n_starts(self):
+        """How many start positions the arena defines, or 0 if unknown.
+
+        The robot carries them on its parsed arena. A stand-in robot without
+        one returns 0, and the env then leaves the choice to move_to_start.
+        """
+        try:
+            locs = (self.robot.maze.training_starting_location
+                    if self.start_mode == 'training'
+                    else self.robot.maze.testing_start_location)
+            return len(locs)
+        except Exception:                                   # noqa: BLE001
+            return 0
 
     def _action_mask(self):
         """Which of the 8 actions the lidar says are clear, as 0/1 float32."""
@@ -164,7 +188,20 @@ class WebotsEnv(gym.Env):
         index = self.start_index
         if options and 'start_index' in options:
             index = int(options['start_index'])
+        # Resolve -1 here rather than letting move_to_start pick, so the env
+        # knows WHICH start this episode came from. Without that the paths
+        # cannot be grouped by start, and the final figure has nothing to
+        # put in its panels. Drawn from the env's seeded RNG, so a seed
+        # still reproduces the whole run.
+        n = self.n_starts()
+        if index == -1 and n > 0:
+            index = int(self.np_random.integers(n))
         self.robot.move_to_start(mode=self.start_mode, index=index)
+        self.start_idx = index
+
+        x, y, _ = self.robot.get_robot_pose()
+        self._path = [(float(x), float(y))]
+        self._ep_reward = 0.0
 
         self._prev_dist = float(self.robot.get_dist_to_goal())
         obs = self.observer.observe(self.robot)
@@ -211,6 +248,22 @@ class WebotsEnv(gym.Env):
         obs = self.observer.observe(self.robot)
         info = self._info(self._action_mask(), blocked=blocked,
                           terminated=terminated)
+
+        self._path.append((info['pose'][0], info['pose'][1]))
+        self._ep_reward += float(reward)
+        if terminated or truncated:
+            # Overwrites the previous episode from this start, so what is
+            # kept is always the latest -- which is what the figure wants:
+            # how the agent behaves NOW, not how it once did.
+            self.last_paths[self.start_idx] = dict(
+                start_idx=self.start_idx,
+                xy=list(self._path),
+                terminated=bool(terminated),
+                truncated=bool(truncated),
+                steps=self.current_step,
+                reward=self._ep_reward,
+                final_dist=info['dist_to_goal'],
+            )
         return obs, float(reward), terminated, truncated, info
 
     def render(self):

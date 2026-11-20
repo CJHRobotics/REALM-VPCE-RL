@@ -54,7 +54,7 @@ The pipeline runs end to end. Four stages, each a SLURM job:
 |---|---|---|
 | collect | `slurm/collect_data.sh <arena>` | `data/vpce/collect_data/<arena>.h5` |
 | fit fields | `slurm/fit_place_fields.sh <arena>` | an ensemble + the field maps |
-| train | `slurm/train_rl.sh <arena>` | a policy + the learning curve |
+| train | `slurm/train_rl.sh <arena>` | a policy, the learning curve, and the final paths from each start |
 | compare | *still to write* | learning time against representation |
 
 The ensemble is **fitted once and frozen** as an encoder. Refitting it online
@@ -65,6 +65,13 @@ The agent observes the simulator and nothing else: every step captures eight
 camera frames at the robot's position, builds the same descriptors the
 dataset was built from, and encodes them through the ensemble. No pose, no
 goal bearing, no lookup from the collected grid.
+
+Episodes start from the arena's `train_start_positions` — six of them in
+`circ_lm8_r10`, 60 degrees apart and alternating between 8 m and 5 m from
+the goal at the origin. Training stops when the success rate holds above a
+threshold, or gives up after a set number of episodes; either way the run
+ends by driving one deterministic episode from each start and drawing the
+routes it took.
 
 Still to write: the sweep that varies scale, multiscale and feature space
 across seeds, and the analysis that turns the Monitor CSVs into

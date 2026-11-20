@@ -226,6 +226,97 @@ def test_reset_is_reproducible():
     return 'reset is reproducible for a fixed seed'
 
 
+class StartsRobot(FakeRobot):
+    """FakeRobot that declares start positions, as a real arena does."""
+
+    STARTS = [(-2.0, -2.0), (2.0, -2.0), (-2.0, 2.0), (0.0, -2.5)]
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        import types
+        self.maze = types.SimpleNamespace(
+            training_starting_location=[
+                types.SimpleNamespace(x=x, y=y, theta=0.0)
+                for x, y in self.STARTS],
+            testing_start_location=[])
+
+    def move_to_start(self, mode='training', index=0):
+        if index is None or not (0 <= index < len(self.STARTS)):
+            index = int(self.rng.integers(len(self.STARTS)))
+        self.x, self.y = self.STARTS[index]
+        self.theta = 0.0
+        return self.get_robot_pose()
+
+
+def test_env_sees_the_arena_starts():
+    env = WebotsEnv(StartsRobot(), FakeObserver(), start_index=-1)
+    assert env.n_starts() == len(StartsRobot.STARTS)
+    env.reset(seed=11)
+    # The env must RESOLVE -1 itself, not pass it through: otherwise it does
+    # not know which start the episode came from and paths cannot be grouped.
+    assert 0 <= env.start_idx < env.n_starts(), f'start_idx={env.start_idx}'
+    return f'resolves a concrete start index out of {env.n_starts()}'
+
+
+def test_path_is_recorded():
+    env = WebotsEnv(StartsRobot(), FakeObserver(), max_steps=5, start_index=0)
+    env.reset(seed=12)
+    for _ in range(5):
+        _o, _r, term, trunc, _i = env.step(0)
+        if term or trunc:
+            break
+    assert env.start_idx in env.last_paths, 'no path stored on episode end'
+    rec = env.last_paths[env.start_idx]
+    xy = rec['xy']
+    # One point for the start, one per step taken.
+    assert len(xy) == rec['steps'] + 1, f'{len(xy)} points for {rec["steps"]} steps'
+    assert abs(xy[0][0] - StartsRobot.STARTS[0][0]) < 1e-9, 'path misses the start'
+    assert rec['terminated'] or rec['truncated']
+    return f'{len(xy)} points recorded for a {rec["steps"]}-step episode'
+
+
+def test_last_path_per_start_is_the_latest():
+    env = WebotsEnv(StartsRobot(), FakeObserver(), max_steps=3, start_index=0)
+    for _ in range(2):
+        env.reset(seed=13)
+        for _ in range(3):
+            if env.step(0)[3] or env.step(0)[2]:
+                break
+    # Two episodes from start 0 leave exactly one record, the newer one.
+    assert list(env.last_paths) == [0], f'keys {list(env.last_paths)}'
+    return 'a repeated start keeps only its most recent episode'
+
+
+def test_path_plot_renders():
+    import tempfile
+    import xml.etree.ElementTree as ET
+    from realm_tools.rl_lib import path_plots
+
+    env = WebotsEnv(StartsRobot(), FakeObserver(), max_steps=40, start_index=0)
+    for i in range(len(StartsRobot.STARTS)):
+        obs, _ = env.reset(seed=20 + i, options={'start_index': i})
+        done = False
+        while not done:
+            best = min(range(N_ACTIONS),
+                       key=lambda a: math.dist(env.robot._target(a), GOAL))
+            _o, _r, term, trunc, _in = env.step(best)
+            done = term or trunc
+    assert len(env.last_paths) == len(StartsRobot.STARTS)
+
+    xml_root = ET.fromstring(
+        f'<world><circular_wall radius="{ARENA_R}"/></world>')
+    with tempfile.TemporaryDirectory() as d:
+        png, summary = path_plots.plot_paths(
+            dict(env.last_paths), xml_root, os.path.join(d, 'p.png'),
+            goal=GOAL, goal_radius=GOAL_RADIUS)
+        assert png and os.path.exists(png), 'no path figure written'
+        assert summary['starts'] == len(StartsRobot.STARTS)
+        assert summary['reached'] >= 1, 'greedy walk reached nothing'
+        assert path_plots.summarise(summary)
+    return (f'{summary["reached"]}/{summary["starts"]} panels drawn '
+            f'from recorded paths')
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     width = max(len(t.__name__) for t in tests)

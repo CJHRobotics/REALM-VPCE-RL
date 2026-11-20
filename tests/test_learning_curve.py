@@ -108,6 +108,77 @@ def test_truncated_csv_still_parses():
     return 'a truncated Monitor CSV loads without losing the run'
 
 
+def _drive(stop, success, max_calls=400):
+    """Feed episodes until the callback asks to stop, as SB3 would.
+
+    SB3 ends training the moment _on_step returns False, so a test that
+    keeps calling past it is testing something that cannot happen -- and
+    will miscount episodes.
+    """
+    ep = {'episode': {'r': float(success), 'l': 5, 'is_success': float(success)}}
+    stop.locals = {'infos': [ep]}
+    for i in range(max_calls):
+        if stop._on_step() is False:
+            return i + 1
+    return None
+
+
+def test_stopper_rejects_a_policy_that_only_looks_converged():
+    """Training success must not be enough on its own.
+
+    The case this guards is real and was observed: 98% success during
+    epsilon-greedy training, 4/6 starts under argmax, because the greedy
+    policy cycles in place and only the exploration noise was escaping.
+    """
+    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+
+    calls = []
+
+    def verify():
+        calls.append(1)
+        # Looks solved in training, fails deterministically -- until the
+        # third check, when the greedy policy genuinely works.
+        return 1.0 if len(calls) >= 3 else 4 / 6
+
+    stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
+                              verify=verify, verify_cooldown=0, verbose=0)
+    stop.num_timesteps = 0
+    stopped_at = _drive(stop, success=1)
+
+    assert stopped_at is not None, 'never stopped'
+    assert len(calls) == 3, f'verify called {len(calls)} times, expected 3'
+    # Ten episodes to fill the window, then one check per episode until the
+    # third passes.
+    assert stopped_at == 12, f'stopped after {stopped_at} episodes'
+    assert stop.stop_reason == 'converged'
+    assert len(stop.summary()['verifications']) == 3
+    return 'training success alone does not end the run'
+
+
+def test_stopper_without_verify_stops_on_training_alone():
+    """The old behaviour is still available when no check is supplied."""
+    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+    stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
+                              verbose=0)
+    stop.num_timesteps = 0
+    stopped_at = _drive(stop, success=1)
+    assert stopped_at == 10, f'stopped after {stopped_at}'
+    assert stop.stop_reason == 'converged'
+    return 'stops on the training window when no verifier is given'
+
+
+def test_stopper_gives_up():
+    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+    stop = ConvergenceStopper(window=10, threshold=0.9, min_episodes=5,
+                              max_episodes=20, verbose=0)
+    stop.num_timesteps = 0
+    stopped_at = _drive(stop, success=0)
+    assert stopped_at == 20, f'gave up after {stopped_at}, expected 20'
+    assert stop.stop_reason == 'gave_up'
+    assert stop.summary()['episodes'] == 20
+    return 'gives up after the episode limit with no convergence'
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     width = max(len(t.__name__) for t in tests)
