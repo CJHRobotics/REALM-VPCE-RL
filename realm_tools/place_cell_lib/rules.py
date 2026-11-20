@@ -1273,9 +1273,9 @@ def admit_fields(ctx, cfg=None, verbose=True):
 
     if verbose:
         print(f'[{tag}] funnel: ' + ' -> '.join(f'{n}={c}' for n, c in funnel))
-        print(f'[{tag}] band coverage: '
-              + ', '.join(f'B{b}={coverage[b]*100:.0f}%' for b in sorted(coverage))
-              + f'  (kept bands {band_range[0]}..{band_range[1]})')
+        print(f'[{tag}] scale coverage: '
+              + ', '.join(f'S{b}={coverage[b]*100:.0f}%' for b in sorted(coverage))
+              + f'  (kept scales {band_range[0]}..{band_range[1]})')
         if not kept:
             print(f'[{tag}] !! Rule 12 admitted no scale — none reached '
                   f'{100*C["TILING_FRAC_MIN"]:.0f}% coverage. This can only '
@@ -1303,7 +1303,7 @@ def admit_fields(ctx, cfg=None, verbose=True):
             elongation=float(elong[k]), orientation_rad=float(theta[k]),
             centroid_x=float(cx[k]), centroid_y=float(cy[k]),
             dist_to_wall_m=float(d_wall[i]),
-            scale_band=int(band[k]),
+            scale=int(band[k]),
             cc_frac=float(cc_frac[k]), n_components=int(n_comp[k]),
             split_half_iou=float(sh_iou[k]),
             parent_id=int(parent[nid]), is_leaf=bool(nid < N),
@@ -1315,7 +1315,7 @@ def admit_fields(ctx, cfg=None, verbose=True):
                     'depth', 'n_members', 'sigma_feature', 'radius_members_m',
                     'area_env_m2', 'radius_env_m', 'semi_major_m', 'semi_minor_m',
                     'elongation', 'orientation_rad', 'centroid_x', 'centroid_y',
-                    'dist_to_wall_m', 'scale_band', 'cc_frac', 'n_components',
+                    'dist_to_wall_m', 'scale', 'cc_frac', 'n_components',
                     'split_half_iou', 'parent_id', 'is_leaf']
     bank_df = pd.DataFrame(rows, columns=BANK_COLUMNS)
     # A unit is multifield when two or more of its subfields were selected.

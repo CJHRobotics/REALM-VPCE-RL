@@ -38,7 +38,7 @@ into the merge cost itself.
 Scale survives all of this, since later analysis asks how scale affects
 learning. The bank carries `n_members`, `radius_members_m` (the position-free
 scale, and the one admission used), `radius_env_m` and `area_env_m2` (the
-projected measures), plus `scale_band`. `--bands` selects bands, which is the
+projected measures), plus `scale`. `--scale` selects scales, which is the
 single-scale / multiscale knob.
 
 Why not k-means. `clustering.fit_kmeans` is still there and is a reasonable
@@ -49,15 +49,15 @@ on evidence, so K is an outcome.
 Usage
 -----
     python3 analysis/fit_place_fields.py circ_lm8_r10
-    python3 analysis/fit_place_fields.py circ_lm8_r10 --bands 3        # one scale
-    python3 analysis/fit_place_fields.py circ_lm8_r10 --bands 2-5      # multiscale
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --scale 3        # one scale
+    python3 analysis/fit_place_fields.py circ_lm8_r10 --scale 2-5      # multiscale
     python3 analysis/fit_place_fields.py circ_lm8_r10 --scale-m 0.4 1.5
     python3 analysis/fit_place_fields.py circ_lm8_r10 --channels hog   # one channel
     python3 analysis/fit_place_fields.py circ_lm8_r10 --subsample 8000 # quick
     python3 analysis/fit_place_fields.py --inspect data/vpce/place_fields/...h5
 
-The three knobs the learning experiment varies -- scale (`--bands`,
-`--scale-m`), multiscale (one band against several) and feature space
+The three knobs the learning experiment varies -- scale (`--scale`,
+`--scale-m`), multiscale (one scale against several) and feature space
 (`--channels`) -- each produce a differently sized observation space from the
 same dataset, which is the point.
 
@@ -108,14 +108,14 @@ RULE_PRESETS = {
 
 # Dropping Rule 11 has one consequence worth stating. Competition was what
 # stopped a node and its own ancestors from both being admitted; without it,
-# every node in the member-count band is a cell, nested ones included, and a
+# every node in the member-count window is a cell, nested ones included, and
 # parent's members are a superset of its child's. Those cells are correlated
 # by construction. For a multiscale representation that is the point -- it is
 # how the same place gets described at several scales at once. For a
-# single-scale run it is not, and the lever is band width: --bands selects
-# geometric scale bands, and a narrow selection excludes a node's direct
-# ancestors because a parent sits at least BAND_RATIO times its child's
-# radius. The fit reports the redundancy either way.
+# single-scale run it is not, and the lever is how many scales are kept:
+# --scale selects geometric scales, and a narrow selection excludes a node's
+# direct ancestors because a parent sits at least BAND_RATIO times its
+# child's radius. The fit reports the redundancy either way.
 
 
 def inspect(path):
@@ -164,10 +164,10 @@ def main():
                     help='admit only fields whose implied radius is in this '
                          'range, in metres; converted to a member count via '
                          'the arena sampling density')
-    ap.add_argument('--bands', default=None, metavar='SPEC',
-                    help='keep only these geometric scale bands, e.g. "3" for '
-                         'a single-scale ensemble or "1-4" for multiscale '
-                         '(default: every admitted band)')
+    ap.add_argument('--scale', default=None, metavar='SPEC',
+                    help='keep only these geometric scales, e.g. "3" for a '
+                         'single-scale ensemble or "1-4" for multiscale '
+                         '(default: every admitted scale)')
     ap.add_argument('--lam', type=float, default=0.0,
                     help='Rule 4 spatial weight; 0 keeps merging purely '
                          'feature-driven (default: 0)')
@@ -181,6 +181,11 @@ def main():
     ap.add_argument('--out', default=None,
                     help='output .h5 (default: data/vpce/place_fields/'
                          '<arena>_<channels>.h5)')
+    ap.add_argument('--no-figure', action='store_true',
+                    help='skip the field-map and scale figures')
+    ap.add_argument('--fig-dir', default=None,
+                    help='where figures go (default: analysis/figures/'
+                         'place_fields/)')
     ap.add_argument('--inspect', metavar='ENSEMBLE_H5', default=None,
                     help='describe a saved ensemble and exit')
     args = ap.parse_args()
@@ -293,24 +298,24 @@ def main():
               'near 1) is the usual cause.', file=sys.stderr)
         return 1
 
-    # Band selection: the single-scale / multiscale knob. Applied after
+    # Scale selection: the single-scale / multiscale knob. Applied after
     # admission rather than inside it, so the funnel still reports what the
     # rules did and only the ensemble is narrowed.
-    if args.bands:
+    if args.scale:
         want = set()
-        for part in args.bands.split(','):
+        for part in args.scale.split(','):
             if '-' in part.strip():
                 a, b = part.split('-')
                 want.update(range(int(a), int(b) + 1))
             else:
                 want.add(int(part))
-        mask = bank_df['scale_band'].isin(want).to_numpy()
+        mask = bank_df['scale'].isin(want).to_numpy()
         if not mask.any():
-            present = sorted(bank_df['scale_band'].unique())
-            print(f'ERROR: no admitted field is in band(s) {sorted(want)}; '
-                  f'this fit produced bands {present}', file=sys.stderr)
+            present = sorted(bank_df['scale'].unique())
+            print(f'ERROR: no admitted field is at scale(s) {sorted(want)}; '
+                  f'this fit produced scales {present}', file=sys.stderr)
             return 1
-        print(f'  bands {sorted(want)}: keeping {int(mask.sum())} of '
+        print(f'  scales {sorted(want)}: keeping {int(mask.sum())} of '
               f'{len(bank_df)} fields')
         bank_df = bank_df[mask].reset_index(drop=True)
         kept_mu = kept_mu[mask]
@@ -369,9 +374,9 @@ def main():
           f'(from {report["n_candidates"]} candidates)')
     print(f'  field area  : min {area.min():.3g}  median {area.median():.3g}  '
           f'max {area.max():.3g} m^2')
-    # coverage is per scale band, not one number: a band covering little of
-    # the floor is informative on its own (Rule 12 used to delete such bands
-    # and no longer does), so report them rather than collapsing them.
+    # coverage is per scale, not one number: a scale covering little of the
+    # floor is informative on its own (Rule 12 used to delete such scales and
+    # no longer does), so report them rather than collapsing them.
     cov = report['coverage']
     if isinstance(cov, dict):
         print('  coverage    : ' + '  '.join(
@@ -391,9 +396,9 @@ def main():
               f'(median {rm.median():.3g})')
     print(f'  scale (projected): r = {bank_df["radius_env_m"].min():.3g} .. '
           f'{bank_df["radius_env_m"].max():.3g} m')
-    counts = bank_df['scale_band'].value_counts().sort_index()
-    print('  cells per band  : ' + '  '.join(
-        f'B{b}={n}' for b, n in counts.items()))
+    counts = bank_df['scale'].value_counts().sort_index()
+    print('  cells per scale : ' + '  '.join(
+        f'S{b}={n}' for b, n in counts.items()))
 
     # How much of the observation space is redundant. With Rule 11 off a node
     # and its ancestors can both be cells, and a parent's members include its
@@ -415,6 +420,33 @@ def main():
 
     print(f'\n  ensemble -> {out_path}')
     print(f'  bank     -> {bank_path}')
+
+    # --------------------------------------------------------------- figures
+    figures = []
+    if not args.no_figure:
+        # Imported here rather than at module scope so that a fit on a host
+        # with no working matplotlib still produces the ensemble, which is
+        # the part nothing else can regenerate.
+        from realm_tools.place_cell_lib import field_plots
+        fig_dir = args.fig_dir or f'{REPO}/analysis/figures/place_fields'
+        stem = os.path.splitext(os.path.basename(out_path))[0]
+        label = (f'{args.arena} | {args.channels} | {args.rules}'
+                 f'{"" if not args.scale else " | scale " + args.scale}')
+        try:
+            f1 = field_plots.field_map(
+                bank_df, env, xml_root, f'{fig_dir}/{stem}_fields.png',
+                title=f'{label}\n{n_cells} place fields projected into the arena')
+            f2 = field_plots.scale_summary(
+                bank_df, f'{fig_dir}/{stem}_scale.png', title=label)
+            figures = [f for f in (f1, f2) if f]
+            for f in figures:
+                print(f'  figure   -> {f}')
+        except Exception as exc:                            # noqa: BLE001
+            # A figure failure must not lose the fit: the ensemble and bank
+            # are already on disk, and the paper's first GAIVI run died in
+            # matplotlib after the expensive part had succeeded.
+            print(f'  WARNING: figures failed ({exc.__class__.__name__}: {exc})')
+
     print(f'  total: {time.time()-t0:.1f}s')
 
     # Round-trip before claiming success: reload from disk and check the
