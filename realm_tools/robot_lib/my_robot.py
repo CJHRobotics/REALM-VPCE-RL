@@ -411,14 +411,22 @@ class MyRobot(HamBot):
         self.rotate_to(action[0])
         self.move_forward_with_PID(action[1])
 
-    def perform_training_action_teleport(self, action_index):
+    def perform_training_action_teleport(self, action_index, settle=True):
+        """Move one action length along the action's absolute bearing.
+
+        Reads the current position from the supervisor fields rather than
+        through get_robot_pose(), which would advance the simulation a step
+        -- a full render -- purely to learn where the robot already is. The
+        destination is then the only thing that matters, and the caller's
+        next step settles the sensors.
+        """
         action = self.action_set.get(action_index)
-        curr_x, curr_y, curr_theta = self.get_robot_pose()
+        curr_x, curr_y, _ = self.read_pose()
         action_theta = math.radians(action[0])
         new_x = curr_x + self.action_length * math.cos(action_theta)
         new_y = curr_y + self.action_length * math.sin(action_theta)
-        self.teleport_robot(x=new_x, y=new_y, theta=action_theta)
-        return self.get_robot_pose()
+        self.teleport_robot(x=new_x, y=new_y, theta=action_theta, settle=settle)
+        return new_x, new_y, action_theta
 
     def get_possible_actions(self):
         min_action_distance = self.action_length + 0.25

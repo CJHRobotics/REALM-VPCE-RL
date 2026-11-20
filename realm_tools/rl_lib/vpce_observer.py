@@ -140,13 +140,25 @@ class VpceObserver:
         # are actually in a simulation looking at pictures.
         from realm_tools.image_lib.image_feature_lib import extract_feature_dict
 
-        heading = self._read_heading(robot)
-        x, y, _ = robot.get_robot_pose()
+        # read_pose costs no simulation step; get_robot_pose would step,
+        # and a step here is a whole render thrown away to learn a position
+        # the supervisor already knows. Falls back for a stand-in robot.
+        if hasattr(robot, 'read_pose'):
+            x, y, heading = robot.read_pose()
+        else:
+            x, y, _ = robot.get_robot_pose()
+            heading = self._read_heading(robot)
         try:
             images, _masks, _azimuths, lidar_scan = robot.capture_pov_images(
                 list(THETAS), lidar_heading_index=LIDAR_HEADING_INDEX)
         finally:
-            robot.teleport_robot(x=x, y=y, theta=heading)
+            # settle=False: whatever reads a sensor next -- the action mask's
+            # lidar read, or the next capture -- steps before it reads, so
+            # the settling step here would render for nothing.
+            try:
+                robot.teleport_robot(x=x, y=y, theta=heading, settle=False)
+            except TypeError:                               # stand-in robot
+                robot.teleport_robot(x=x, y=y, theta=heading)
         if len(images) != len(THETAS):
             raise RuntimeError(f'expected {len(THETAS)} headings, '
                                f'got {len(images)}')

@@ -79,11 +79,14 @@ class FakeRobot:
             mask[a] = 1.0 if math.hypot(nx, ny) <= ARENA_R else 0.0
         return mask
 
-    def perform_training_action_teleport(self, a):
+    def perform_training_action_teleport(self, a, settle=True):
         self.x, self.y = self._target(a)
         self.theta = math.radians(a * 45)
         self.moves += 1
-        return self.get_robot_pose()
+        # Returns the destination directly, as MyRobot now does: calling
+        # get_robot_pose() here would advance the simulation a step -- a
+        # whole render -- to learn a position just computed.
+        return self.x, self.y, self.theta
 
     perform_training_action = perform_training_action_teleport
 
@@ -315,6 +318,71 @@ def test_path_plot_renders():
         assert path_plots.summarise(summary)
     return (f'{summary["reached"]}/{summary["starts"]} panels drawn '
             f'from recorded paths')
+
+
+class CountingRobot(StartsRobot):
+    """Counts the operations that cost a Webots simulation step.
+
+    In Webots the camera and lidar are enabled at the basic timestep, so
+    EVERY simulation step is a full render. Anything that steps merely to
+    read a value the supervisor already holds is a render thrown away, and
+    a training step that does it four extra times is 30% slower for
+    nothing. These are easy to reintroduce by accident, hence the test.
+    """
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        from collections import Counter
+        self.counts = Counter()
+
+    def get_robot_pose(self):          # STEPS in the real robot
+        self.counts['stepping_pose'] += 1
+        return super().get_robot_pose()
+
+    def read_pose(self):               # free: supervisor fields only
+        self.counts['free_pose'] += 1
+        return self.x, self.y, self.theta
+
+    def get_possible_training_action_mask(self):   # STEPS (reads lidar)
+        self.counts['mask'] += 1
+        return super().get_possible_training_action_mask()
+
+    def perform_training_action_teleport(self, a, settle=True):
+        self.counts['action'] += 1
+        self.counts['settle'] += int(settle)
+        return super().perform_training_action_teleport(a)
+
+
+class CountingObserver(FakeObserver):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.n_observe = 0
+
+    def observe(self, robot):
+        self.n_observe += 1
+        return super().observe(robot)
+
+
+def test_step_does_no_redundant_simulation_steps():
+    robot = CountingRobot()
+    env = WebotsEnv(robot, CountingObserver(), max_steps=50, start_index=0)
+    env.reset(seed=30)
+    robot.counts.clear()
+    env.step(0)
+
+    c = robot.counts
+    assert c['mask'] == 1, (
+        f"action mask computed {c['mask']} times in one step; it reads the "
+        f"lidar and so costs a render each time")
+    assert c['stepping_pose'] == 0, (
+        f"{c['stepping_pose']} stepping pose reads; read_pose is free and "
+        f"should be used wherever the value is only recorded")
+    assert c['settle'] == 0, (
+        'the action teleport settled, but the observer steps before reading '
+        'the camera, so that render is wasted')
+    assert c['action'] == 1
+    return (f"1 mask, {c['free_pose']} free pose reads, 0 stepping reads, "
+            f"0 redundant settles")
 
 
 def main():

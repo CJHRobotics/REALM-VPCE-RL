@@ -60,7 +60,10 @@ class HamBot(Supervisor):
         # Webots RpLidarA2: https://www.cyberbotics.com/doc/guide/lidar-sensors#slamtec-rplidar-a2
         self.lidar = self.experiment_supervisor.getDevice('lidar')
         self.lidar.enable(self.timestep)
-        self.lidar.enablePointCloud()
+        # enablePointCloud() is deliberately NOT called: nothing in this
+        # repo ever calls getPointCloud(), and Webots builds the cloud on
+        # every lidar update whether or not anyone reads it. The range image
+        # is what the code uses, and that comes without it.
 
         # Webots IMU: https://www.cyberbotics.com/doc/guide/imu-sensors#mpu-9250
         # Webots IMU Accelerometer: https://www.cyberbotics.com/doc/reference/accelerometer
@@ -83,10 +86,31 @@ class HamBot(Supervisor):
                 break
 
     def get_robot_pose(self):
+        """Pose, advancing the simulation one step first.
+
+        The step is what makes this expensive: with the camera and lidar
+        enabled at the basic timestep, every step is a full render. Use
+        `read_pose()` instead wherever the value is only being recorded or
+        reported -- it reads the same supervisor fields and costs nothing.
+        """
         while self.experiment_supervisor.step(self.timestep) != -1:
             current_x, current_y, current_z = self.robot_translation_field.getSFVec3f()
             break
         return current_x, current_y, self.get_compass_reading()
+
+    def read_pose(self):
+        """Pose straight from the supervisor fields, with NO simulation step.
+
+        Supervisor fields are the authoritative values and are readable at
+        any time; stepping to read them renders the scene for nothing. The
+        heading comes from the rotation field rather than the IMU compass,
+        so it is also exact rather than rounded to whole degrees.
+
+        Returns (x, y, theta_radians). Note the units differ from
+        get_robot_pose, which returns the compass bearing in DEGREES.
+        """
+        x, y, _z = self.robot_translation_field.getSFVec3f()
+        return x, y, float(self.robot_rotation_field.getSFRotation()[3])
 
     # Reads the robot's IMU compass and return bearing in degrees
     #   North   -> 90
@@ -210,11 +234,22 @@ class HamBot(Supervisor):
         url_field.setMFString(0, texture)
 
     # Teleports the robot to the point (x,y,z)
-    def teleport_robot(self, x=0.0, y=0.0, z=0.09, theta=math.pi):
+    def teleport_robot(self, x=0.0, y=0.0, z=0.09, theta=math.pi, settle=True):
+        """Move the robot. `settle=False` skips the post-move simulation step.
+
+        The step exists so the sensors report from the new position rather
+        than the old one, and skipping it is only safe when the caller
+        steps again before reading any sensor -- which is exactly the case
+        when a teleport is immediately followed by a capture or a lidar
+        read, both of which step first. Each skipped step is a whole render
+        saved, and in a training loop that is the difference between a run
+        and a timeout.
+        """
         self.robot_translation_field.setSFVec3f([x, y, z])
         self.robot_rotation_field.setSFRotation([0, 0, 1, theta])
         self.robot_node.resetPhysics()
-        self.sensor_calibration(stop_num=0)  # 1 step is enough post-teleport
+        if settle:
+            self.sensor_calibration(stop_num=0)  # 1 step is enough post-teleport
 
     def move_to_start(self, mode='testing', index=0):
         if mode == 'training':

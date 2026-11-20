@@ -166,8 +166,17 @@ class WebotsEnv(gym.Env):
         return np.asarray(self.robot.get_possible_training_action_mask(),
                           dtype=np.float32)
 
+    def _pose(self):
+        """Pose without advancing the simulation, when the robot allows it.
+
+        Every avoided step is an avoided render. get_robot_pose() steps.
+        """
+        if hasattr(self.robot, 'read_pose'):
+            return self.robot.read_pose()
+        return self.robot.get_robot_pose()
+
     def _info(self, mask, blocked=False, terminated=False):
-        x, y, heading = self.robot.get_robot_pose()
+        x, y, heading = self._pose()
         return {
             'action_mask': mask,
             'dist_to_goal': float(self.robot.get_dist_to_goal()),
@@ -199,7 +208,7 @@ class WebotsEnv(gym.Env):
         self.robot.move_to_start(mode=self.start_mode, index=index)
         self.start_idx = index
 
-        x, y, _ = self.robot.get_robot_pose()
+        x, y, _ = self._pose()
         self._path = [(float(x), float(y))]
         self._ep_reward = 0.0
 
@@ -219,7 +228,15 @@ class WebotsEnv(gym.Env):
 
         if not blocked:
             if self.teleport:
-                self.robot.perform_training_action_teleport(action)
+                # settle=False: the observer's first capture steps before it
+                # reads the camera, and nothing between here and there reads
+                # a sensor -- check_at_goal and get_dist_to_goal both read
+                # supervisor fields directly.
+                try:
+                    self.robot.perform_training_action_teleport(
+                        action, settle=False)
+                except TypeError:                           # stand-in robot
+                    self.robot.perform_training_action_teleport(action)
             else:
                 self.robot.perform_training_action(action)
 
@@ -246,8 +263,12 @@ class WebotsEnv(gym.Env):
         # it were expensive to produce and unused -- it is not unused: SB3
         # bootstraps from the final observation on truncation.
         obs = self.observer.observe(self.robot)
-        info = self._info(self._action_mask(), blocked=blocked,
-                          terminated=terminated)
+        # The mask computed at the top of this step is reused rather than
+        # recomputed. get_possible_actions() advances the simulation to read
+        # the lidar, so computing it twice per step cost an entire extra
+        # render for a value that has not changed since -- the robot is back
+        # where the action left it, the observer having restored its pose.
+        info = self._info(mask, blocked=blocked, terminated=terminated)
 
         self._path.append((info['pose'][0], info['pose'][1]))
         self._ep_reward += float(reward)

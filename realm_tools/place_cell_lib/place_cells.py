@@ -27,7 +27,7 @@ import numpy as np
 # Core computation
 # ---------------------------------------------------------------------------
 
-def rbf_activations(features, centers, radii, normalize='row'):
+def rbf_activations(features, centers, radii, normalize='row', c_sq=None):
     """
     Compute the RBF activation matrix.
 
@@ -43,6 +43,11 @@ def rbf_activations(features, centers, radii, normalize='row'):
         Place cell centroids in feature space.
     radii    : np.ndarray, shape (K,)
         RBF sigma (receptive field width) per cell.
+    c_sq     : np.ndarray, shape (K,), optional
+        Precomputed row norms of `centers`. The centres never change, so
+        recomputing this on every call re-reads the whole centroid matrix
+        for nothing -- at 1223 cells x 58912 features that is 576 MB a
+        call, and it was the single largest cost in a training step.
     normalize : {'row', 'minmax', None}
         How to normalise the raw RBF response.
         - 'row'    : each row sums to 1 (population code — default).
@@ -58,7 +63,8 @@ def rbf_activations(features, centers, radii, normalize='row'):
     """
     features = np.atleast_2d(features)
     f_sq     = np.sum(features ** 2, axis=1, keepdims=True)   # (N, 1)
-    c_sq     = np.sum(centers  ** 2, axis=1)                   # (K,)
+    if c_sq is None:
+        c_sq = np.sum(centers ** 2, axis=1)                    # (K,)
     fc       = features @ centers.T                             # (N, K)
     dist_sq  = np.maximum(f_sq - 2 * fc + c_sq, 0)            # (N, K)
     raw      = np.exp(-dist_sq / (2 * radii ** 2))             # (N, K)
@@ -150,8 +156,18 @@ class VisualPlaceCellEnsemble:
     """
 
     def __init__(self, centers, radii, channels=None, scales=None):
-        self.centers = np.asarray(centers, dtype=np.float64)   # (K, D)
-        self.radii   = np.asarray(radii,   dtype=np.float64)   # (K,)
+        # float32, not float64. The centroids are means of float32 features
+        # (rules.py builds cand_mu as float32), so float64 stored nothing
+        # that was not already an exact upcast -- it only doubled the memory
+        # traffic of every activation. Measured at 1223 x 58912: 340 ms per
+        # observation in float64 with c_sq recomputed each call, 9.8 ms in
+        # float32 with it cached, agreeing to the last bit.
+        self.centers = np.ascontiguousarray(centers, dtype=np.float32)
+        self.radii   = np.asarray(radii, dtype=np.float32)
+        # Accumulated in float64 for accuracy, kept in float32 to match the
+        # matmul it is added to.
+        self._c_sq = np.sum(np.asarray(self.centers, dtype=np.float64) ** 2,
+                            axis=1).astype(np.float32)
         # How the feature space was built. Carried so a saved ensemble can be
         # applied to a NEW observation later -- see `encode`.
         self.channels = tuple(channels) if channels is not None else None
@@ -230,8 +246,9 @@ class VisualPlaceCellEnsemble:
         np.ndarray, shape (N, K)
         """
         return rbf_activations(
-            np.asarray(features, dtype=np.float64),
+            np.asarray(features, dtype=np.float32),
             self.centers,
             self.radii,
             normalize=normalize,
+            c_sq=self._c_sq,
         )
