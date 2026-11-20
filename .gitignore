@@ -253,5 +253,12 @@ venv-vpce-rl/
 
 # Webots Stuff
 *.wbproj
-# SLURM job logs — job output, not source
-slurm/logs/
+# SLURM job logs — job output, not source. The DIRECTORY is tracked (via
+# .gitkeep) while its contents are not: SBATCH --output=slurm/logs/%x-%j.out
+# is opened by slurm BEFORE the job script runs, so a fresh clone without
+# this directory fails every job at submission with "Could not open stdout
+# file" and no log to say why -- the mkdir inside each script is too late.
+# Note this must exclude the CONTENTS (slurm/logs/*), not the directory:
+# git cannot re-include a file whose parent directory is itself excluded.
+slurm/logs/*
+!slurm/logs/.gitkeep
