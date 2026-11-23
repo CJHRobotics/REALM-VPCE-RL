@@ -123,36 +123,34 @@ def _drive(stop, success, max_calls=400):
     return None
 
 
-def test_stopper_rejects_a_policy_that_only_looks_converged():
-    """Training success must not be enough on its own.
+def test_stopper_can_be_resumed_after_a_failed_check():
+    """The caller raises the bar and training continues.
 
-    The case this guards is real and was observed: 98% success during
-    epsilon-greedy training, 4/6 starts under argmax, because the greedy
-    policy cycles in place and only the exploration noise was escaping.
+    Verification cannot happen inside the callback -- resetting the
+    training env mid-rollout raises "Tried to step environment that needs
+    reset". So the stopper ends a stretch, the caller checks the greedy
+    policy, and on a failure sets min_episodes_next and resumes. This is
+    that contract.
     """
     from realm_tools.rl_lib.callbacks import ConvergenceStopper
-
-    calls = []
-
-    def verify():
-        calls.append(1)
-        # Looks solved in training, fails deterministically -- until the
-        # third check, when the greedy policy genuinely works.
-        return 1.0 if len(calls) >= 3 else 4 / 6
-
     stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
-                              verify=verify, verify_cooldown=0, verbose=0)
+                              verbose=0)
     stop.num_timesteps = 0
-    stopped_at = _drive(stop, success=1)
 
-    assert stopped_at is not None, 'never stopped'
-    assert len(calls) == 3, f'verify called {len(calls)} times, expected 3'
-    # Ten episodes to fill the window, then one check per episode until the
-    # third passes.
-    assert stopped_at == 12, f'stopped after {stopped_at} episodes'
+    first = _drive(stop, success=1)
+    assert first == 10, f'first stretch ended at {first}'
     assert stop.stop_reason == 'converged'
-    assert len(stop.summary()['verifications']) == 3
-    return 'training success alone does not end the run'
+
+    # The caller checked the greedy policy, it failed, so it resumes with
+    # the bar raised.
+    stop.stop_reason = None
+    stop.min_episodes_next = stop.episodes + 25
+    second = _drive(stop, success=1)
+    assert second is not None, 'never stopped again'
+    assert stop.episodes == 35, (
+        f'resumed to episode {stop.episodes}; should have run 25 more '
+        f'before stopping again')
+    return 'a failed check resumes training with the bar raised'
 
 
 def test_stopper_without_verify_stops_on_training_alone():

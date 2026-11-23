@@ -39,45 +39,34 @@ class ConvergenceStopper(BaseCallback):
     max_episodes : int or None
         Give up after this many episodes regardless. None leaves the
         timestep budget as the only limit.
-    verify : callable or None
-        Called when the trailing window first clears the threshold, and
-        expected to return the fraction of DETERMINISTIC rollouts that
-        succeed. Convergence is only declared if that fraction also clears
-        `verify_threshold`.
+    NOT verifying here, deliberately
+        An earlier version took a `verify` callable and ran deterministic
+        rollouts from inside this callback. That is wrong, and it raised
+        "Tried to step environment that needs reset": a callback runs in the
+        middle of SB3's rollout collection, and resetting or stepping the
+        training environment from there destroys the episode state the
+        VecEnv and Monitor are holding. Had it not raised, it would have
+        been worse -- training would have resumed from an observation SB3
+        did not take, corrupting the run silently.
 
-        This is not belt-and-braces, it is the difference between a correct
-        and an incorrect answer. Training is epsilon-greedy, and even at a
-        final epsilon of 0.05 the occasional random action is enough to jolt
-        an agent out of a limit cycle. A policy that oscillates between two
-        states forever under argmax can therefore show a high success rate
-        during training and fail completely when run deterministically.
-        Observed directly: a run reporting 98% success over its last 100
-        training episodes reached the goal from only 4 of 6 starts when
-        rolled out deterministically, the other two cycling in place until
-        the step budget ran out.
-    verify_threshold : float
-        Fraction of deterministic rollouts that must succeed. Defaults to
-        1.0: every start, because a policy that cannot solve one of six
-        starting positions has not converged on the task.
-    verify_cooldown : int
-        Episodes to wait before verifying again after a failed check, so a
-        near-threshold run does not spend all its budget on verification.
+        Verification belongs BETWEEN calls to learn(), where the environment
+        is idle. This callback stops on the training criterion and records
+        why; the caller then checks the greedy policy and resumes training
+        if it is not good enough. See the loop in the rl_agent controller.
     """
 
     def __init__(self, window=100, threshold=0.8, min_episodes=300,
-                 max_episodes=None, verify=None, verify_threshold=1.0,
-                 verify_cooldown=100, verbose=1):
+                 max_episodes=None, verbose=1):
         super().__init__(verbose)
         self.window = int(window)
         self.threshold = float(threshold)
         self.min_episodes = int(min_episodes)
         self.max_episodes = max_episodes
-        self.verify = verify
-        self.verify_threshold = float(verify_threshold)
-        self.verify_cooldown = int(verify_cooldown)
         self.successes = deque(maxlen=self.window)
         self.episodes = 0
-        self._next_verify_at = 0
+        # Set by the caller after a failed deterministic check, so the next
+        # stretch of training does not stop again on the same window.
+        self.min_episodes_next = 0
         self.verifications = []
         # Set when training stops early: 'converged' or 'gave_up'. Left None
         # when the timestep budget ran out first.
@@ -103,24 +92,8 @@ class ConvergenceStopper(BaseCallback):
             if (self.episodes >= max(self.window, self.min_episodes)
                     and len(self.successes) == self.window
                     and self.success_rate >= self.threshold
-                    and self.episodes >= self._next_verify_at):
+                    and self.episodes >= self.min_episodes_next):
                 rate = self.success_rate
-                if self.verify is not None:
-                    checked = float(self.verify())
-                    self.verifications.append(
-                        dict(episode=self.episodes, training=rate,
-                             deterministic=checked))
-                    if checked < self.verify_threshold:
-                        # Training looks converged, the greedy policy is not.
-                        # Keep going; check again after the cooldown.
-                        self._next_verify_at = self.episodes + self.verify_cooldown
-                        if self.verbose:
-                            print(f'\n[check] {rate:.0%} in training but '
-                                  f'{checked:.0%} deterministic at episode '
-                                  f'{self.episodes} -- not converged, '
-                                  f'continuing', flush=True)
-                        continue
-                    rate = checked
                 self.stop_reason = 'converged'
                 self.stop_episode = self.episodes
                 if self.verbose:
@@ -146,8 +119,8 @@ class ConvergenceStopper(BaseCallback):
             final_success_rate=self.success_rate,
             window=self.window,
             threshold=self.threshold,
-            # Every time training looked converged and the greedy policy was
-            # checked. A long list means the policy kept oscillating, which
-            # is worth knowing when reading the learning curve.
+            # Every time training looked converged and the caller checked
+            # the greedy policy. A long list means the policy kept
+            # oscillating, which is worth knowing when reading the curve.
             verifications=self.verifications,
         )

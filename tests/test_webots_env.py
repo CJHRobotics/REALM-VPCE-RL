@@ -385,6 +385,63 @@ def test_step_does_no_redundant_simulation_steps():
             f"0 redundant settles")
 
 
+def test_learn_then_verify_loop_survives(_budget=1200):
+    """The real training structure: learn, verify, resume.
+
+    This is a regression test for a crash that only appears with SB3 in the
+    loop. Running deterministic rollouts from inside a callback resets and
+    steps the training environment in the middle of SB3's rollout
+    collection; Monitor then raises "Tried to step environment that needs
+    reset" when training resumes. Verification between learn() calls, where
+    the environment is idle, is safe -- and this drives exactly that, so a
+    future move of the check back into the callback fails here instead of
+    four hours into a cluster job.
+    """
+    from stable_baselines3.common.monitor import Monitor
+    from realm_tools.rl_lib.agents import make_agent
+    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+
+    env = Monitor(WebotsEnv(StartsRobot(), FakeObserver(n=16), max_steps=20,
+                            start_index=-1),
+                  info_keywords=('is_success',))
+    model = make_agent('DQN', env, seed=0, verbose=0,
+                       learning_starts=10, buffer_size=1000)
+
+    def rollout(i):
+        obs, _ = env.reset(options={'start_index': i})
+        done = term = False
+        while not done:
+            a, _ = model.predict(obs, deterministic=True)
+            obs, _r, term, trunc, _in = env.step(int(a))
+            done = term or trunc
+        return bool(term)
+
+    stopper = ConvergenceStopper(window=5, threshold=0.8, min_episodes=5,
+                                 verbose=0)
+    checks = 0
+    while model.num_timesteps < _budget:
+        model.learn(total_timesteps=_budget - model.num_timesteps,
+                    callback=stopper, reset_num_timesteps=False)
+        if stopper.stop_reason != 'converged':
+            break
+        # The call that used to corrupt the env when made from inside the
+        # callback. Training must survive it and carry on.
+        n = env.unwrapped.n_starts()
+        _rate = sum(rollout(i) for i in range(n)) / n
+        checks += 1
+        stopper.stop_reason = None
+        stopper.min_episodes_next = stopper.episodes + 5
+        # SB3's own idiom for "the env moved under you": discarding
+        # _last_obs makes _setup_learn reset it on the next learn().
+        model._last_obs = None
+        if checks > 4:
+            break
+
+    assert model.num_timesteps > 0, 'no training happened'
+    return (f'{model.num_timesteps} steps over {checks} verification '
+            f'round-trip(s), no reset error')
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     width = max(len(t.__name__) for t in tests)

@@ -209,21 +209,62 @@ else:
     def verify_deterministic():
         """Fraction of starts the greedy policy actually solves.
 
-        Costs one episode per start, and is only called when training
-        already looks converged -- cheap against the alternative of
-        stopping on a policy that cycles in place under argmax.
+        Only ever called BETWEEN learn() calls. Calling it from inside a
+        callback resets and steps the training environment in the middle of
+        SB3's rollout collection, which raises "Tried to step environment
+        that needs reset" -- or, worse, would silently resume training from
+        an observation SB3 never took.
         """
         n = env.unwrapped.n_starts()
         if n <= 0:
             return 1.0
         return sum(rollout(model, start_index=i)[0] for i in range(n)) / n
 
-    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES,
-                                 verify=verify_deterministic)
-    model.learn(total_timesteps=TIMESTEPS, progress_bar=False,
-                callback=stopper)
+    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES)
+
+    # Training in stretches, so the greedy policy can be checked where the
+    # environment is idle. The stopper ends a stretch when the trailing
+    # training window clears the threshold; if the deterministic rollouts
+    # agree, the run is done, and if they do not, training resumes with the
+    # bar raised so it does not stop again on the same window.
+    #
+    # A stop for any other reason -- gave up, or the timestep budget -- is
+    # final and breaks out.
+    while model.num_timesteps < TIMESTEPS:
+        remaining = TIMESTEPS - model.num_timesteps
+        model.learn(total_timesteps=remaining, progress_bar=False,
+                    callback=stopper, reset_num_timesteps=False)
+        if stopper.stop_reason != 'converged':
+            break
+        checked = verify_deterministic()
+        stopper.verifications.append(
+            dict(episode=stopper.episodes, steps=int(model.num_timesteps),
+                 training=stopper.success_rate, deterministic=checked))
+        if checked >= 1.0:
+            print(f'\nconverged: {checked:.0%} of starts solved '
+                  f'deterministically after {stopper.episodes} episodes / '
+                  f'{model.num_timesteps} steps', flush=True)
+            break
+        print(f'\n[check] {stopper.success_rate:.0%} in training but '
+              f'{checked:.0%} deterministic at episode {stopper.episodes} '
+              f'-- not converged, continuing', flush=True)
+        stopper.stop_reason = None
+        stopper.min_episodes_next = stopper.episodes + 100
+        # The rollouts above ended their episodes, so Monitor now needs a
+        # reset -- and learn(reset_num_timesteps=False) resumes by STEPPING,
+        # which raises "Tried to step environment that needs reset".
+        # Discarding _last_obs is SB3's own idiom for this (base_class.py
+        # does it in set_env): _setup_learn resets the env when _last_obs is
+        # None, so training restarts from a clean episode instead of from a
+        # state the verification left behind.
+        model._last_obs = None
+
     model.save(MODEL_PATH)
     stop = stopper.summary()
+    if stop['stop_reason'] == 'budget_exhausted' and stopper.verifications:
+        # Distinguish "never looked converged" from "looked converged
+        # repeatedly and never held up" -- very different findings.
+        stop['stop_reason'] = 'budget_exhausted_after_failed_checks'
     print(f'\ntraining ended: {stop["stop_reason"]} after {stop["episodes"]} '
           f'episodes ({stop["final_success_rate"]:.0%} success over the last '
           f'{stop["window"]})', flush=True)

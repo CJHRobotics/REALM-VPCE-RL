@@ -55,7 +55,7 @@ The pipeline runs end to end. Four stages, each a SLURM job:
 | collect | `slurm/collect_data.sh <arena>` | `data/vpce/collect_data/<arena>.h5` |
 | fit fields | `slurm/fit_place_fields.sh <arena>` | an ensemble + the field maps |
 | train | `slurm/train_rl.sh <arena>` | a policy, the learning curve, and the final paths from each start |
-| compare | *still to write* | learning time against representation |
+| compare | `analysis/compare_runs.py --by algo` | learning curves and learning time across runs |
 
 The ensemble is **fitted once and frozen** as an encoder. Refitting it online
 as the agent explores is the more interesting claim and remains open, but the
@@ -73,9 +73,20 @@ threshold, or gives up after a set number of episodes; either way the run
 ends by driving one deterministic episode from each start and drawing the
 routes it took.
 
-Still to write: the sweep that varies scale, multiscale and feature space
-across seeds, and the analysis that turns the Monitor CSVs into
-learning-time-against-representation.
+A sweep is one command. `bash slurm/train_rl.sh --submit circ_lm8_r10`
+submits DQN and PPO across three seeds, and `analysis/compare_runs.py`
+groups the finished runs by any config field — `--by algo` for the
+algorithms, `--by n_cells` for representation size, `--by seed` for the
+run-to-run variation that says whether either of the others is real. It
+refuses to compare quietly: runs that differ in more than the grouping
+field are reported as a confound rather than averaged together.
+
+Seeds are not optional. Learning time varies between identical runs by more
+than several of the effects being measured, so one run per condition cannot
+separate a real difference from an unlucky seed.
+
+Still to write: the sweep over scale, multiscale and feature space, which is
+the same machinery pointed at different ensembles.
 
 ---
 

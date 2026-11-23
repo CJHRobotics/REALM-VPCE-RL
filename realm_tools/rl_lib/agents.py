@@ -44,10 +44,40 @@ DQN_KWARGS = dict(
     gamma=0.99,
 )
 
-# Left at SB3's defaults deliberately. PPO is the on-policy control here,
-# not a tuned competitor, and tuning one arm of a comparison and not the
-# other is worse than tuning neither.
-PPO_KWARGS = dict()
+# PPO was originally left at SB3's stock defaults, on the grounds that it
+# was a control rather than a competitor. Once it became an arm of a
+# published comparison that stopped being defensible: DQN carries eight
+# task-motivated departures from its defaults and PPO carried none, which is
+# the exact asymmetry the DQN comment warns against.
+#
+# The fix is to give PPO the SAME KIND of adjustment, not more. Of DQN's
+# departures, most are algorithm-specific and have no counterpart -- buffer
+# size, target update interval, learning starts. Two are about the task
+# rather than the algorithm:
+#
+#   replay ratio    "steps are expensive, so learn more from each one".
+#                   PPO's counterpart is n_epochs, passes over each rollout,
+#                   and SB3 already defaults it to 10. Nothing to change.
+#   exploration     "the reward is sparse, so the goal has to be found
+#                   before anything can be learned". PPO's counterpart is
+#                   the entropy bonus, and SB3 defaults ent_coef to 0.0 --
+#                   no exploration pressure at all beyond the policy's own
+#                   stochasticity. On a sparse-reward task that is a real
+#                   handicap, and leaving it at 0 while DQN explores for 30%
+#                   of its budget would not be a fair comparison.
+#
+# Everything else stays at SB3's tuned defaults. In particular the learning
+# rate is NOT matched to DQN's: 3e-4 is PPO's own tuned value and 1e-3 is
+# DQN's, and forcing them equal would be a false symmetry rather than a fair
+# one -- the two optimise different objectives.
+PPO_KWARGS = dict(
+    ent_coef=0.01,
+    # Named explicitly rather than left implicit, so the comparison records
+    # that they were matched where they are comparable.
+    gamma=0.99,
+    n_epochs=10,
+    n_steps=2048,
+)
 
 
 def algo_kwargs(algo):

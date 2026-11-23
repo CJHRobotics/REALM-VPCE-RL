@@ -15,6 +15,7 @@
 #   REALM_TIMESTEPS=200000 sbatch slurm/train_rl.sh circ_lm8_r10
 #   REALM_ALGO=PPO REALM_SEED=1 sbatch slurm/train_rl.sh circ_lm8_r10
 #   REALM_MAX_EPISODES=3000 sbatch slurm/train_rl.sh circ_lm8_r10
+#   bash slurm/train_rl.sh --submit circ_lm8_r10   # DQN and PPO x 3 seeds
 #
 # Training stops early on convergence (REALM_STOP_AT, default 0.8 success
 # over the last 100 episodes) or gives up after REALM_MAX_EPISODES. Either
@@ -63,6 +64,46 @@
 # --------------------------------------------------------------------------
 
 set -euo pipefail
+
+# --------------------------------------------------------------- submit mode
+# Run with bash on the login node, not sbatch: it only calls sbatch, once per
+# (algorithm, seed). One job per combination rather than a loop inside one
+# job, because they are independent and queue in parallel -- and because a
+# single job that dies takes every condition with it.
+#
+#   bash slurm/train_rl.sh --submit                       # DQN and PPO x 3 seeds
+#   bash slurm/train_rl.sh --submit circ_lm8_r10
+#   ALGOS=DQN SEEDS=0,1,2,3,4 bash slurm/train_rl.sh --submit circ_lm8_r10
+#
+# Seeds are not optional for a comparison. Learning time varies run to run
+# by more than many of the effects being measured, so a single seed per
+# algorithm cannot distinguish "PPO is slower" from "that PPO run was
+# unlucky". Three is a floor, five is better.
+if [[ "${1:-}" == "--submit" ]]; then
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+    mkdir -p slurm/logs
+    SUB_ARENA="${2:-circ_lm8_r10}"
+    ALGO_LIST="${ALGOS:-DQN,PPO}"; ALGO_LIST="${ALGO_LIST//,/ }"
+    SEED_LIST="${SEEDS:-0,1,2}";   SEED_LIST="${SEED_LIST//,/ }"
+    n=0
+    for algo in $ALGO_LIST; do
+        # tr rather than ${algo,,}: lowercase expansion is bash 4, and macOS
+        # ships 3.2, so the dry run on a laptop would silently differ.
+        lower="$(echo "$algo" | tr 'A-Z' 'a-z')"
+        for seed in $SEED_LIST; do
+            tag="${SUB_ARENA}_${lower}_s${seed}"
+            sbatch --job-name="trainrl-${lower}-s${seed}" \
+                --export=ALL,REALM_ALGO="$algo",REALM_SEED="$seed",REALM_RUN_TAG="$tag" \
+                slurm/train_rl.sh "$SUB_ARENA"
+            n=$((n + 1))
+        done
+    done
+    echo
+    echo "$n job(s) submitted for $SUB_ARENA: [$ALGO_LIST] x [$SEED_LIST]"
+    echo "When they finish, compare them with:"
+    echo "  python3 analysis/compare_runs.py --by algo"
+    exit 0
+fi
 
 ARENA="${1:-circ_lm8_r10}"
 shift || true
