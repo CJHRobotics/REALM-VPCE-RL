@@ -80,12 +80,47 @@ PPO_KWARGS = dict(
 )
 
 
+def pick_device(prefer=None):
+    """'cuda' only if a tensor can actually be put on it, else 'cpu'.
+
+    torch.cuda.is_available() is not enough. It reports a device count,
+    which succeeds without ever creating a CUDA context -- so on a cluster
+    it can return True and the first real allocation still fail with
+    cudaErrorDevicesUnavailable (the GPU in exclusive-process compute mode
+    with a context already held, another job occupying it, or a driver too
+    old for the build in a way that only surfaces on context creation).
+
+    SB3's device='auto' trusts is_available(), so that failure arrives
+    inside Model.__init__ as an unhandled AcceleratorError and takes the
+    whole run with it. Probing here converts a crash into a slower run,
+    which is the right trade: measured on this task, the network is 0.15 ms
+    of a 118 ms environment step, so CPU costs almost nothing while a dead
+    job costs everything.
+
+    `prefer` of 'cpu' or 'cuda' overrides the probe; None auto-detects.
+    """
+    import torch
+
+    if prefer in ('cpu', 'cuda'):
+        return prefer
+    if not torch.cuda.is_available():
+        return 'cpu'
+    try:
+        # Forces context creation, which is what actually fails.
+        torch.zeros(1, device='cuda')
+        return 'cuda'
+    except Exception as exc:                                # noqa: BLE001
+        print(f'  CUDA reported available but unusable, falling back to CPU: '
+              f'{exc.__class__.__name__}: {exc}', flush=True)
+        return 'cpu'
+
+
 def algo_kwargs(algo):
     """Hyperparameters for an algorithm name, or {} if it has none set."""
     return dict({'DQN': DQN_KWARGS, 'PPO': PPO_KWARGS}.get(algo.upper(), {}))
 
 
-def make_agent(algo, env, seed=0, verbose=1, **overrides):
+def make_agent(algo, env, seed=0, verbose=1, device=None, **overrides):
     """Build an SB3 agent with this project's hyperparameters.
 
     `overrides` wins over the defaults, so a sweep can vary one setting
@@ -103,4 +138,5 @@ def make_agent(algo, env, seed=0, verbose=1, **overrides):
 
     kwargs = algo_kwargs(algo)
     kwargs.update(overrides)
+    kwargs.setdefault('device', pick_device(device))
     return cls('MlpPolicy', env, verbose=verbose, seed=seed, **kwargs)

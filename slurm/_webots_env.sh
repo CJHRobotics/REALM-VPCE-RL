@@ -67,7 +67,13 @@ container_binds() {
 # immediately with no useful message.
 preflight() {
     echo "--- preflight: $PYTHON_BIN inside the image ---"
-    "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "$SIF" "$PYTHON_BIN" - <<'PYCHK'
+    # GPU_ARGS, same as the run. Without them the container has no GPU at
+    # all, so the preflight reported "cuda False" and "nvidia-smi
+    # unavailable" while the job that followed printed "Using cuda device"
+    # -- a flat contradiction that sent a real debugging session the wrong
+    # way. Every caller runs gpu_args before preflight, so they are set.
+    "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
+        "$SIF" "$PYTHON_BIN" - <<'PYCHK'
 import sys
 print('  python', sys.version.split()[0], 'at', sys.executable)
 missing = []
@@ -121,14 +127,43 @@ try:
         print('  torch built for:', ' '.join(archs) or '(none - CPU only)')
         if torch.cuda.is_available():
             cap = torch.cuda.get_device_capability(0)
-            want = f'sm_{cap[0]}{cap[1]}'
-            if want not in archs:
-                print(f'  WARNING: this GPU is {want}, which this wheel was '
-                      f'NOT built for. Expect "no kernel image is '
-                      f'available". Pin a supported node, or install a '
-                      f'wheel that includes {want}.')
+            # An exact sm_XY match is NOT required. CUDA guarantees binary
+            # compatibility forward across minor revisions within a major,
+            # so sm_60 code runs on an sm_61 card -- which is exactly the
+            # 1080 Ti case here, and an exact-match check wrongly condemned
+            # a wheel that works. PTX entries (compute_XY) JIT forward too.
+            def _split(a):
+                d = a.split('_')[1]
+                return int(d[:-1]), int(d[-1])
+            ok = any(a.startswith('sm_') and _split(a)[0] == cap[0]
+                     and _split(a)[1] <= cap[1] for a in archs)
+            ok = ok or any(a.startswith('compute_') and _split(a) <= cap
+                           for a in archs)
+            if not ok:
+                print(f'  WARNING: this GPU is sm_{cap[0]}{cap[1]} and the '
+                      f'wheel has no compatible code for it. Expect "no '
+                      f'kernel image is available". Pin a supported node.')
     except Exception:
         pass
+
+# is_available() only counts devices; it creates no context, so it can say
+# True and the first real allocation still fail. That is what happened
+# here: SB3 chose cuda, then .to(device) raised
+# cudaErrorDevicesUnavailable and killed the run. Probe properly.
+try:
+    import torch
+    if torch.cuda.is_available():
+        try:
+            torch.zeros(1, device='cuda')
+            print('  cuda allocation OK')
+        except Exception as e:
+            print(f'  WARNING: cuda reports available but allocation FAILED '
+                  f'({e.__class__.__name__}: {e}).')
+            print('    Usually the GPU is in exclusive-process compute mode '
+                  'with a context already held, or another job is on the '
+                  'same card. Training falls back to CPU rather than dying.')
+except Exception:
+    pass
 except Exception:
     pass
 try:
