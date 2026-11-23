@@ -169,7 +169,7 @@ echo "Arena   : $ARENA"
 echo "Ensemble: $ENSEMBLE"
 echo "Run tag : $TAG   ->  $OUT_DIR"
 echo "Algo    : ${REALM_ALGO:-DQN}   steps=${REALM_TIMESTEPS:-100000}  seed=${REALM_SEED:-0}"
-echo "Stop at : ${REALM_STOP_AT:-0.8} success   give up after ${REALM_MAX_EPISODES:-0} episodes (0 = no limit)"
+echo "Stop at : ${REALM_STOP_AT:-0.8} success   abandon below ${REALM_GIVE_UP_BELOW:-0.10} after ${REALM_GIVE_UP_AFTER:-0.5} of the budget"
 echo "Teleport: ${REALM_TELEPORT:-1}   shaping=${REALM_SHAPING:-0}"
 echo "Image   : $SIF"
 echo "Python  : $PYTHON_BIN"
@@ -207,6 +207,8 @@ set +e
     --env REALM_EVAL_ONLY="${REALM_EVAL_ONLY:-0}" \
     --env REALM_STOP_AT="${REALM_STOP_AT:-0.8}" \
     --env REALM_MAX_EPISODES="${REALM_MAX_EPISODES:-0}" \
+    --env REALM_GIVE_UP_BELOW="${REALM_GIVE_UP_BELOW:-0.10}" \
+    --env REALM_GIVE_UP_AFTER="${REALM_GIVE_UP_AFTER:-0.5}" \
     --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \
     xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" \

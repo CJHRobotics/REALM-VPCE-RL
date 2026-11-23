@@ -165,6 +165,48 @@ def test_stopper_without_verify_stops_on_training_alone():
     return 'stops on the training window when no verifier is given'
 
 
+def test_gives_up_on_no_progress_but_only_after_the_step_gate():
+    """The bound must not fire while exploration is still annealing.
+
+    Checked before the gate, a trailing success rate reads epsilon-greedy
+    noise rather than the policy, and would abandon runs that were about to
+    learn. Checked after it, a run still near zero is genuinely stuck.
+    """
+    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+    stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
+                              give_up_below=0.2, give_up_after_steps=1000,
+                              verbose=0)
+    stop.num_timesteps = 500            # before the gate
+    assert _drive(stop, success=0, max_calls=40) is None, (
+        'gave up before the step gate')
+    assert stop.stop_reason is None
+
+    stop.num_timesteps = 1500           # past the gate
+    assert _drive(stop, success=0, max_calls=40) is not None, (
+        'did not give up after the step gate')
+    assert stop.stop_reason == 'gave_up_no_progress'
+    assert stop.summary()['give_up_below'] == 0.2
+    return 'held before the gate, abandoned after it'
+
+
+def test_no_progress_bound_spares_a_learning_run():
+    """A run above the floor keeps its budget."""
+    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+    stop = ConvergenceStopper(window=10, threshold=0.95, min_episodes=10,
+                              give_up_below=0.2, give_up_after_steps=0,
+                              verbose=0)
+    stop.num_timesteps = 10_000
+    # 50% success: well under the 95% convergence bar, well over the 20%
+    # floor. It should be left alone to keep learning.
+    ep_ok = {'episode': {'r': 1.0, 'l': 5, 'is_success': 1.0}}
+    ep_no = {'episode': {'r': 0.0, 'l': 5, 'is_success': 0.0}}
+    for i in range(60):
+        stop.locals = {'infos': [ep_ok if i % 2 else ep_no]}
+        assert stop._on_step() is not False, f'abandoned at episode {i}'
+    assert stop.stop_reason is None
+    return 'a run at 50% is neither converged nor abandoned'
+
+
 def test_stopper_gives_up():
     from realm_tools.rl_lib.callbacks import ConvergenceStopper
     stop = ConvergenceStopper(window=10, threshold=0.9, min_episodes=5,

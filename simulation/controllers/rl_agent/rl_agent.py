@@ -24,6 +24,8 @@ without editing anything. They are read once, at the top, and echoed:
     REALM_EVAL_ONLY   1 to load the saved model and only evaluate
     REALM_STOP_AT     success rate counting as converged       (0.8)
     REALM_MAX_EPISODES give up after this many episodes        (unlimited)
+    REALM_GIVE_UP_BELOW  abandon under this success rate       (0.10)
+    REALM_GIVE_UP_AFTER  fraction of the budget before checking (0.5)
 
 Output goes to data/vpce/rl_runs/<tag>/: the SB3 model, the Monitor CSV of
 per-episode reward and length -- which is the learning curve, and so the
@@ -66,6 +68,13 @@ SEED = int(os.environ.get('REALM_SEED', 0))
 EVAL_ONLY = os.environ.get('REALM_EVAL_ONLY', '0') == '1'
 STOP_AT = float(os.environ.get('REALM_STOP_AT', 0.8))
 MAX_EPISODES = int(os.environ.get('REALM_MAX_EPISODES', 0)) or None
+# Abandon a run that is clearly not learning, rather than spending the rest
+# of the budget rendering for nothing. Checked only after half the budget,
+# well past DQN's 30% exploration anneal, so it reads the policy and not
+# epsilon. Set REALM_GIVE_UP_BELOW=0 to disable.
+GIVE_UP_BELOW = float(os.environ.get('REALM_GIVE_UP_BELOW', 0.10)) or None
+GIVE_UP_AFTER = int(float(os.environ.get('REALM_GIVE_UP_AFTER', 0.5))
+                    * TIMESTEPS)
 TAG = os.environ.get(
     'REALM_RUN_TAG',
     f'{MAZE}_{ALGO.lower()}_s{SEED}' + ('_shaped' if SHAPING else ''))
@@ -75,6 +84,9 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 print(f'maze={MAZE}  algo={ALGO}  steps={TIMESTEPS}  teleport={TELEPORT}  '
       f'shaping={SHAPING}  seed={SEED}', flush=True)
+print(f'stop at {STOP_AT:.0%} success; give up below '
+      f'{GIVE_UP_BELOW if GIVE_UP_BELOW else 0:.0%} after {GIVE_UP_AFTER:,} '
+      f'steps', flush=True)
 print(f'ensemble: {ENSEMBLE}', flush=True)
 print(f'output  : {OUT_DIR}', flush=True)
 
@@ -134,7 +146,11 @@ with open(f'{OUT_DIR}/config.json', 'w') as f:
                    teleport=TELEPORT, shaping=SHAPING, seed=SEED,
                    tag=TAG,
                    # Recorded so a run can be reproduced, and so a sweep
-                   # can be checked for having held them constant.
+                   # can be checked for having held them constant. The
+                   # give-up bound especially: a run it stopped is not
+                   # comparable with one that had the full budget.
+                   give_up_below=GIVE_UP_BELOW,
+                   give_up_after_steps=GIVE_UP_AFTER,
                    hyperparameters=algo_kwargs(ALGO)), f, indent=2)
 
 
@@ -220,7 +236,9 @@ else:
             return 1.0
         return sum(rollout(model, start_index=i)[0] for i in range(n)) / n
 
-    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES)
+    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES,
+                                 give_up_below=GIVE_UP_BELOW,
+                                 give_up_after_steps=GIVE_UP_AFTER)
 
     # Training in stretches, so the greedy policy can be checked where the
     # environment is idle. The stopper ends a stretch when the trailing
