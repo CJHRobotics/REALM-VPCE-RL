@@ -30,7 +30,7 @@ THETAS = [0.0, 0.7854, 1.5708, 2.3562, 3.1416, 3.9270, 4.7124, 5.4978]
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-robot = MyRobot(enable_cnn_features=False)
+robot = MyRobot()
 robot.load_environment(MAZE_FILE, floor_texture='carpet')
 
 positions = pd.read_csv(POSITIONS_FILE)

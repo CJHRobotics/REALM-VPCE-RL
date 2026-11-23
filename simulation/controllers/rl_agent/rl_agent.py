@@ -112,7 +112,7 @@ if os.path.exists(dataset):
     observer.check_against_dataset(dataset)
     print('ensemble matches the arena dataset', flush=True)
 
-robot = MyRobot(enable_cnn_features=False)
+robot = MyRobot()
 robot.load_environment(f'simulation/worlds/environments/vpce/{MAZE}.xml',
                        floor_texture='carpet')
 
