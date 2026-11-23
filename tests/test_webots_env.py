@@ -442,6 +442,37 @@ def test_learn_then_verify_loop_survives(_budget=1200):
             f'round-trip(s), no reset error')
 
 
+def test_controller_hides_gpu_before_importing_torch():
+    """The CUDA_VISIBLE_DEVICES line must stay above every torch import.
+
+    Once torch has seen a device, setting the variable does nothing. The
+    line is therefore order-dependent in a way nothing else in the file is,
+    and an import added above it would silently restore a bug that killed a
+    run 2048 steps in: torch 2.14's optimizer calls
+    torch.accelerator.current_stream() unconditionally, which raises on a
+    visible-but-unusable GPU even when every tensor is on the CPU.
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'simulation', 'controllers',
+        'rl_agent', 'rl_agent.py')
+    lines = open(path, encoding='utf-8').read().splitlines()
+
+    guard = next((i for i, l in enumerate(lines)
+                  if "os.environ['CUDA_VISIBLE_DEVICES']" in l), None)
+    assert guard is not None, 'the CUDA_VISIBLE_DEVICES guard is gone'
+
+    # Anything that reaches torch: SB3 and the rl_lib modules that import it.
+    risky = [(i, l) for i, l in enumerate(lines)
+             if i < guard
+             and (l.startswith('import ') or l.startswith('from '))
+             and any(m in l for m in ('torch', 'stable_baselines3',
+                                      'realm_tools', 'gymnasium'))]
+    assert not risky, (
+        f'these imports precede the GPU guard at line {guard + 1}, so it '
+        f'has no effect: {[(i + 1, l) for i, l in risky]}')
+    return f'guard at line {guard + 1}, above every torch-reaching import'
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     width = max(len(t.__name__) for t in tests)

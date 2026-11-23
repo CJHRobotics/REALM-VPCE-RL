@@ -26,6 +26,7 @@ without editing anything. They are read once, at the top, and echoed:
     REALM_MAX_EPISODES give up after this many episodes        (unlimited)
     REALM_GIVE_UP_BELOW  abandon under this success rate       (0.10)
     REALM_GIVE_UP_AFTER  fraction of the budget before checking (0.5)
+    REALM_DEVICE      cpu or cuda for the network             (cpu)
 
 Output goes to data/vpce/rl_runs/<tag>/: the SB3 model, the Monitor CSV of
 per-episode reward and length -- which is the learning curve, and so the
@@ -37,6 +38,30 @@ import json
 import os
 import sys
 import time
+
+# Hide the GPU from torch BEFORE anything imports it. This must stay above
+# every other import: stable_baselines3 pulls torch in, and once torch has
+# seen a device the setting no longer has any effect.
+#
+# Two reasons, and the second is the one that forced this.
+#
+# Webots holds the GPU for rendering, and the controller is a separate
+# process. On a card in exclusive-process compute mode the controller
+# cannot also create a CUDA context, so it gets cudaErrorDevicesUnavailable
+# however politely it asks.
+#
+# A visible-but-unusable device is NOT neutral. Selecting device='cpu' is
+# not enough: torch 2.14's optimizer calls torch.accelerator.current_stream()
+# unconditionally in its graph-capture health check, and torch.accelerator
+# resolves from AVAILABILITY rather than from where the tensors live. So a
+# run that had correctly fallen back to CPU still died 2048 steps in, inside
+# optimizer.step(). Hiding the device removes the whole class of problem.
+#
+# This costs essentially nothing: measured on this task the network is
+# 0.15 ms of a 118 ms environment step. Set REALM_DEVICE=cuda to opt back
+# in, which is only sensible where Webots is not holding the card.
+if os.environ.get('REALM_DEVICE', 'cpu').lower() == 'cpu':
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 # Webots launches this from the controller's own directory, so the repo is
 # neither the working directory nor on sys.path. Resolve from __file__ and
@@ -213,7 +238,8 @@ if EVAL_ONLY:
     rate, mean_len = evaluate(model)
     print(f'eval: success {rate:.0%}  mean steps {mean_len:.1f}', flush=True)
 else:
-    model = make_agent(ALGO, env, seed=SEED, verbose=1)
+    model = make_agent(ALGO, env, seed=SEED, verbose=1,
+                       device=os.environ.get('REALM_DEVICE', 'cpu'))
 
     # Before training, so the learning curve has a baseline. An untrained
     # policy that already solves the task would mean the task is trivial,

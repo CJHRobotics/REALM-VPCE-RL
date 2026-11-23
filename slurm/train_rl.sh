@@ -209,6 +209,7 @@ set +e
     --env REALM_MAX_EPISODES="${REALM_MAX_EPISODES:-0}" \
     --env REALM_GIVE_UP_BELOW="${REALM_GIVE_UP_BELOW:-0.10}" \
     --env REALM_GIVE_UP_AFTER="${REALM_GIVE_UP_AFTER:-0.5}" \
+    --env REALM_DEVICE="${REALM_DEVICE:-cpu}" \
     --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \
     xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" \
