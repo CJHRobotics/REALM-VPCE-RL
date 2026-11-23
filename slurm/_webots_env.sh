@@ -86,86 +86,72 @@ for m in ('numpy', 'pandas', 'h5py', 'cv2', 'matplotlib', 'PIL', 'tqdm',
         __import__(m)
     except Exception as e:
         missing.append(f'{m} ({e.__class__.__name__})')
-try:
+def _torch_report():
+    """Everything useful about torch and the GPU, or why there is none."""
     import torch
     print('  torch', torch.__version__, 'cuda', torch.cuda.is_available())
-    if torch.cuda.is_available():
-        cap = torch.cuda.get_device_capability(0)
-        print(f'  gpu   {torch.cuda.get_device_name(0)} sm_{cap[0]}{cap[1]}')
-    else:
-        # "cuda False" on a node that clearly has a GPU is the single most
+
+    if not torch.cuda.is_available():
+        # "cuda False" on a node that clearly has a GPU is the most
         # confusing state this setup produces, and the bare flag never says
-        # why. The two causes look identical from the flag and need
-        # completely different fixes, so name which one it is.
+        # why. The two causes look identical and need different fixes.
         built = getattr(torch.version, 'cuda', None)
         if built is None:
-            print('  WHY NO CUDA: this is a CPU-only torch build. Install a '
-                  'CUDA build.')
-        else:
-            import subprocess
-            try:
-                drv = subprocess.run(
-                    ['nvidia-smi', '--query-gpu=driver_version,name',
-                     '--format=csv,noheader'],
-                    capture_output=True, text=True, timeout=10).stdout.strip()
-            except Exception:
-                drv = '(nvidia-smi unavailable)'
-            print(f'  WHY NO CUDA: torch built for CUDA {built}; '
-                  f'driver reports {drv}')
-            major = int(str(built).split('.')[0])
-            if major >= 13:
-                print('    CUDA 13 needs a driver from the 580 series. A '
-                      'CUDA 12.x build runs on any 525+ driver (minor '
-                      'version compatibility), so install one of those.')
-    # Which GPU architectures this wheel actually contains. Compatibility is
-    # forward-only: a wheel can JIT onto a NEWER card than it was built for,
-    # never onto an older one. On a cluster spanning sm_61 (1080 Ti) to
-    # sm_90 (H100), a wheel missing the low end fails hard on those nodes
-    # with "no kernel image is available", which reads like a driver fault.
-    try:
-        archs = torch.cuda.get_arch_list()
-        print('  torch built for:', ' '.join(archs) or '(none - CPU only)')
-        if torch.cuda.is_available():
-            cap = torch.cuda.get_device_capability(0)
-            # An exact sm_XY match is NOT required. CUDA guarantees binary
-            # compatibility forward across minor revisions within a major,
-            # so sm_60 code runs on an sm_61 card -- which is exactly the
-            # 1080 Ti case here, and an exact-match check wrongly condemned
-            # a wheel that works. PTX entries (compute_XY) JIT forward too.
-            def _split(a):
-                d = a.split('_')[1]
-                return int(d[:-1]), int(d[-1])
-            ok = any(a.startswith('sm_') and _split(a)[0] == cap[0]
-                     and _split(a)[1] <= cap[1] for a in archs)
-            ok = ok or any(a.startswith('compute_') and _split(a) <= cap
-                           for a in archs)
-            if not ok:
-                print(f'  WARNING: this GPU is sm_{cap[0]}{cap[1]} and the '
-                      f'wheel has no compatible code for it. Expect "no '
-                      f'kernel image is available". Pin a supported node.')
-    except Exception:
-        pass
-
-# is_available() only counts devices; it creates no context, so it can say
-# True and the first real allocation still fail. That is what happened
-# here: SB3 chose cuda, then .to(device) raised
-# cudaErrorDevicesUnavailable and killed the run. Probe properly.
-try:
-    import torch
-    if torch.cuda.is_available():
+            print('  WHY NO CUDA: CPU-only torch build. Install a CUDA build.')
+            return
         try:
-            torch.zeros(1, device='cuda')
-            print('  cuda allocation OK')
-        except Exception as e:
-            print(f'  WARNING: cuda reports available but allocation FAILED '
-                  f'({e.__class__.__name__}: {e}).')
-            print('    Usually the GPU is in exclusive-process compute mode '
-                  'with a context already held, or another job is on the '
-                  'same card. Training falls back to CPU rather than dying.')
-except Exception:
-    pass
-except Exception:
-    pass
+            import subprocess
+            drv = subprocess.run(
+                ['nvidia-smi', '--query-gpu=driver_version,name',
+                 '--format=csv,noheader'],
+                capture_output=True, text=True, timeout=10).stdout.strip()
+        except Exception:
+            drv = '(nvidia-smi unavailable)'
+        print(f'  WHY NO CUDA: torch built for CUDA {built}; driver {drv}')
+        if int(str(built).split('.')[0]) >= 13:
+            print('    CUDA 13 needs a 580-series driver. A CUDA 12.x build '
+                  'runs on any 525+ driver, so install one of those.')
+        return
+
+    cap = torch.cuda.get_device_capability(0)
+    print(f'  gpu   {torch.cuda.get_device_name(0)} sm_{cap[0]}{cap[1]}')
+
+    archs = torch.cuda.get_arch_list()
+    print('  torch built for:', ' '.join(archs) or '(none)')
+
+    # An exact sm_XY match is NOT required: CUDA guarantees binary
+    # compatibility forward across minor revisions within a major, so sm_60
+    # code runs on an sm_61 card. An exact-match check wrongly condemns a
+    # wheel that works.
+    def _cc(a):
+        d = a.split('_')[1]
+        return int(d[:-1]), int(d[-1])
+    ok = any(a.startswith('sm_') and _cc(a)[0] == cap[0] and _cc(a)[1] <= cap[1]
+             for a in archs)
+    ok = ok or any(a.startswith('compute_') and _cc(a) <= cap for a in archs)
+    if not ok:
+        print(f'  WARNING: no compatible code for sm_{cap[0]}{cap[1]} in this '
+              f'wheel. Expect "no kernel image is available".')
+
+    # is_available() only counts devices and creates no context, so it can
+    # say True while the first real allocation fails. That is what killed a
+    # run with cudaErrorDevicesUnavailable, so probe for real.
+    try:
+        torch.zeros(1, device='cuda')
+        print('  cuda allocation OK')
+    except Exception as e:
+        print(f'  WARNING: cuda available but allocation FAILED '
+              f'({e.__class__.__name__}: {e}).')
+        print('    Usually exclusive-process compute mode with a context '
+              'already held, or another job on the card. Training falls '
+              'back to CPU rather than dying.')
+
+
+try:
+    _torch_report()
+except Exception as e:
+    print(f'  torch report unavailable ({e.__class__.__name__}: {e})')
+
 try:
     import controller                      # Webots bindings, from PYTHONPATH
     print('  controller module OK')
