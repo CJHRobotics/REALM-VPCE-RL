@@ -83,6 +83,52 @@ for m in ('numpy', 'pandas', 'h5py', 'cv2', 'matplotlib', 'PIL', 'tqdm',
 try:
     import torch
     print('  torch', torch.__version__, 'cuda', torch.cuda.is_available())
+    if torch.cuda.is_available():
+        cap = torch.cuda.get_device_capability(0)
+        print(f'  gpu   {torch.cuda.get_device_name(0)} sm_{cap[0]}{cap[1]}')
+    else:
+        # "cuda False" on a node that clearly has a GPU is the single most
+        # confusing state this setup produces, and the bare flag never says
+        # why. The two causes look identical from the flag and need
+        # completely different fixes, so name which one it is.
+        built = getattr(torch.version, 'cuda', None)
+        if built is None:
+            print('  WHY NO CUDA: this is a CPU-only torch build. Install a '
+                  'CUDA build.')
+        else:
+            import subprocess
+            try:
+                drv = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=driver_version,name',
+                     '--format=csv,noheader'],
+                    capture_output=True, text=True, timeout=10).stdout.strip()
+            except Exception:
+                drv = '(nvidia-smi unavailable)'
+            print(f'  WHY NO CUDA: torch built for CUDA {built}; '
+                  f'driver reports {drv}')
+            major = int(str(built).split('.')[0])
+            if major >= 13:
+                print('    CUDA 13 needs a driver from the 580 series. A '
+                      'CUDA 12.x build runs on any 525+ driver (minor '
+                      'version compatibility), so install one of those.')
+    # Which GPU architectures this wheel actually contains. Compatibility is
+    # forward-only: a wheel can JIT onto a NEWER card than it was built for,
+    # never onto an older one. On a cluster spanning sm_61 (1080 Ti) to
+    # sm_90 (H100), a wheel missing the low end fails hard on those nodes
+    # with "no kernel image is available", which reads like a driver fault.
+    try:
+        archs = torch.cuda.get_arch_list()
+        print('  torch built for:', ' '.join(archs) or '(none - CPU only)')
+        if torch.cuda.is_available():
+            cap = torch.cuda.get_device_capability(0)
+            want = f'sm_{cap[0]}{cap[1]}'
+            if want not in archs:
+                print(f'  WARNING: this GPU is {want}, which this wheel was '
+                      f'NOT built for. Expect "no kernel image is '
+                      f'available". Pin a supported node, or install a '
+                      f'wheel that includes {want}.')
+    except Exception:
+        pass
 except Exception:
     pass
 try:
