@@ -193,14 +193,23 @@ def rollout(model, start_index=None):
     return bool(term), steps
 
 
-def evaluate(model, n_episodes=20):
-    """Deterministic rollouts from random starts: success rate and length."""
+def evaluate(model, n_episodes=20, label='eval'):
+    """Deterministic rollouts from random starts: success rate and length.
+
+    Reports each episode as it finishes. Ten episodes of a policy that mostly
+    truncates at 200 steps is several minutes of wall clock, and without a
+    line per episode that stretch is indistinguishable from a hang -- which
+    is exactly how it was read. collect_data.py carries the same lesson.
+    """
     wins, lengths = 0, []
-    for _ in range(n_episodes):
+    for i in range(n_episodes):
         reached, steps = rollout(model)
         if reached:
             wins += 1
             lengths.append(steps)
+        print(f'  {label} {i + 1}/{n_episodes}: '
+              f'{"reached in" if reached else "timed out after"} {steps} steps',
+              flush=True)
     return wins / n_episodes, (float(np.mean(lengths)) if lengths else float('nan'))
 
 
@@ -244,7 +253,9 @@ else:
     # Before training, so the learning curve has a baseline. An untrained
     # policy that already solves the task would mean the task is trivial,
     # and no comparison between representations could show anything.
-    rate0, len0 = evaluate(model, n_episodes=10)
+    print('\nevaluating the untrained policy over 10 episodes for a '
+          'baseline; expect a few minutes, one line each', flush=True)
+    rate0, len0 = evaluate(model, n_episodes=10, label='baseline')
     print(f'before training: success {rate0:.0%}  mean steps {len0:.1f}',
           flush=True)
 
@@ -328,7 +339,7 @@ else:
           f'episodes ({stop["final_success_rate"]:.0%} success over the last '
           f'{stop["window"]})', flush=True)
 
-    rate1, len1 = evaluate(model)
+    rate1, len1 = evaluate(model, label='final eval')
     print(f'after training : success {rate1:.0%}  mean steps {len1:.1f}',
           flush=True)
     result = dict(success_before=rate0, success_after=rate1,
