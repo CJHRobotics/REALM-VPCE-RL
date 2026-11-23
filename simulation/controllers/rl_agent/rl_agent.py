@@ -262,8 +262,23 @@ else:
             return 1.0
         return sum(rollout(model, start_index=i)[0] for i in range(n)) / n
 
+    # The give-up floor has to sit ABOVE what an untrained policy already
+    # scores, or it can never fire. Measured here: pre-training success ran
+    # 20-50% across runs, because a random walk finds a 0.8 m goal in a 10 m
+    # arena often enough. A fixed 10% floor was therefore inert on exactly
+    # the runs it existed to cut short.
+    #
+    # So it is relative to the baseline this run just measured: abandon only
+    # if, halfway through the budget, the agent is no better than it was
+    # before training. Capped at 0.5 because rate0 comes from 10 episodes
+    # and is noisy, and a high draw must not set a floor that kills a run
+    # which is genuinely learning.
+    give_up_floor = min(0.5, max(GIVE_UP_BELOW, rate0 + 0.10))
+    print(f'give up below {give_up_floor:.0%} after {GIVE_UP_AFTER:,} steps '
+          f'(untrained baseline was {rate0:.0%})', flush=True)
+
     stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES,
-                                 give_up_below=GIVE_UP_BELOW,
+                                 give_up_below=give_up_floor,
                                  give_up_after_steps=GIVE_UP_AFTER)
 
     # Training in stretches, so the greedy policy can be checked where the
