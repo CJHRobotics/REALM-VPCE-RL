@@ -33,7 +33,7 @@ The model and the simulation infrastructure, not the analysis.
 
 | | where | what it does |
 |---|---|---|
-| **Feature extraction** | `realm_tools/image_lib/image_feature_lib.py` | HOG, colour and spatial histograms, per POV image |
+| **Feature extraction** | `realm_tools/image_lib/feature_extractor.py` | ResNet50 plus HOG, colour and spatial histograms, per POV image |
 | **Ensemble formation** | `realm_tools/place_cell_lib/clustering.py` | k-means (`fit_kmeans`) or GMM (`fit_gmm`) over feature vectors; each cluster becomes a place cell |
 | **Activation encoding** | `realm_tools/place_cell_lib/place_cells.py` | `rbf_activations`, `VisualPlaceCellEnsemble`, `SpatialPlaceCellEnsemble` |
 | **Robot and arenas** | `realm_tools/robot_lib/`, `simulation/` | HamBot, the Webots protos, the VPCE arena set and its position grids |
@@ -186,6 +186,7 @@ REALM-VPCE-RL/
 │   │   ├── start_position_generator.py  # Position grids for collection
 │   │   └── (robot and arena plumbing)
 │   ├── image_lib/
+│   │   ├── feature_extractor.py  # ResNet50 + HOG feature extraction
 │   │   ├── image_feature_lib.py  # Image processing utilities
 │   │   └── analysis_plots.py     # Shared plotting helpers
 │   ├── place_cell_lib/

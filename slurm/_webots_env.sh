@@ -67,10 +67,7 @@ container_binds() {
 # immediately with no useful message.
 preflight() {
     echo "--- preflight: $PYTHON_BIN inside the image ---"
-    # GPU_ARGS so "cuda" below reports what the RUN sees; without
-    # them the container has no GPU and the line is misleading.
-    "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
-        "$SIF" "$PYTHON_BIN" - <<'PYCHK'
+    "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "$SIF" "$PYTHON_BIN" - <<'PYCHK'
 import sys
 print('  python', sys.version.split()[0], 'at', sys.executable)
 missing = []

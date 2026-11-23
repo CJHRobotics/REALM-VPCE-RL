@@ -6,7 +6,7 @@ import operator
 import numpy as np
 import math
 class MyRobot(HamBot):
-    def __init__(self, action_length=0.5):
+    def __init__(self,action_length=0.5,enable_cnn_features=False,cnn_extractor_model=None):
         HamBot.__init__(self)
         self.action_length = action_length
         self.action_set = {
@@ -23,6 +23,15 @@ class MyRobot(HamBot):
         # Experiment Variables
         self.previous_action_index = -1
 
+        # Enable CNN-based feature extraction if required
+        self.enable_cnn_features = enable_cnn_features
+        self.cnn_extractor_model = cnn_extractor_model
+        if self.enable_cnn_features:
+            from realm_tools.image_lib.feature_extractor import FeatureExtractor
+            self.cnn_feature_extractor = FeatureExtractor(self.cnn_extractor_model)
+        else:
+            self.cnn_feature_extractor = None
+
     def get_robot_feature_pose(self):
         while self.experiment_supervisor.step(self.timestep) != -1:
             current_x, current_y, current_z = self.robot_translation_field.getSFVec3f()
@@ -30,15 +39,24 @@ class MyRobot(HamBot):
         return current_x, current_y, self.get_closest_action_heading()
 
     def get_robot_pov_features(self):
-        """One POV image reduced to its descriptor blocks, plus landmarks.
+        """
+        Get combined feature vector including CNN features, multimodal features, and robot pose.
 
         Returns:
-            multimodal_features, landmark_mask, landmark_azimuths
+            np.ndarray: Combined feature vector suitable for clustering.
         """
         pov, landmark_mask, landmark_azimuths = self.get_pov_image()
         x, y, theta = self.get_robot_pose()
+
+        # Extract CNN features if enabled
+        if self.enable_cnn_features:
+            cnn_features = self.cnn_feature_extractor.get_cnn_features(pov)
+        else:
+            cnn_features = np.array([])  # Empty array if CNN features are not enabled
+
         multimodal_features = extract_combined_features(pov, landmark_mask, theta)
-        return multimodal_features, landmark_mask, landmark_azimuths
+
+        return multimodal_features, cnn_features, landmark_mask, landmark_azimuths
 
     def capture_pov_images(self, thetas, lidar_heading_index=0):
         """
@@ -86,8 +104,13 @@ class MyRobot(HamBot):
         # Phase 2 — extract features in parallel (pure CPU, no Webots dependency)
         with ThreadPoolExecutor() as executor:
             multimodal_features = list(executor.map(extract_combined_features, images))
+            if self.enable_cnn_features:
+                cnn_features = list(executor.map(
+                    self.cnn_feature_extractor.get_cnn_features, images))
+            else:
+                cnn_features = None
 
-        return np.concatenate(multimodal_features)
+        return np.concatenate(multimodal_features), cnn_features
 
     def get_pov_image(self):
         while self.experiment_supervisor.step(self.timestep) != -1:

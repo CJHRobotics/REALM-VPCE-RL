@@ -39,27 +39,6 @@ class ConvergenceStopper(BaseCallback):
     max_episodes : int or None
         Give up after this many episodes regardless. None leaves the
         timestep budget as the only limit.
-
-        Note this is a weak bound in practice. Episodes shorten as an agent
-        improves, so an episode cap binds only on runs that are ALREADY
-        succeeding -- at a 100k-step budget and a 200-step cap, a run that
-        never learns reaches about 500 episodes, so any cap above that is
-        inert on exactly the runs worth cutting short. Use the two below
-        for that.
-    give_up_below : float or None
-        Success rate under which the run is abandoned, checked only after
-        `give_up_after_steps`. None disables it.
-    give_up_after_steps : int or None
-        When to start checking. This must sit after exploration has
-        annealed, or the check reads epsilon-greedy noise rather than the
-        policy: DQN explores over the first 30% of its budget by default,
-        and a trailing success rate before that says nothing about whether
-        the agent is learning.
-
-        A run stopped this way is recorded as 'gave_up_no_progress' and is
-        NOT comparable with one that had its full budget -- it did not fail
-        to converge in 100k steps, it was never given 100k steps. Any
-        comparison that pools the two is measuring the bound.
     NOT verifying here, deliberately
         An earlier version took a `verify` callable and ran deterministic
         rollouts from inside this callback. That is wrong, and it raised
@@ -77,15 +56,12 @@ class ConvergenceStopper(BaseCallback):
     """
 
     def __init__(self, window=100, threshold=0.8, min_episodes=300,
-                 max_episodes=None, give_up_below=None,
-                 give_up_after_steps=None, verbose=1):
+                 max_episodes=None, verbose=1):
         super().__init__(verbose)
         self.window = int(window)
         self.threshold = float(threshold)
         self.min_episodes = int(min_episodes)
         self.max_episodes = max_episodes
-        self.give_up_below = give_up_below
-        self.give_up_after_steps = give_up_after_steps
         self.successes = deque(maxlen=self.window)
         self.episodes = 0
         # Set by the caller after a failed deterministic check, so the next
@@ -126,23 +102,6 @@ class ConvergenceStopper(BaseCallback):
                           f'steps', flush=True)
                 return False
 
-            # Checked on a full window only: a partial window early in a
-            # stretch can read far below the true rate.
-            if (self.give_up_below is not None
-                    and self.give_up_after_steps
-                    and self.num_timesteps >= self.give_up_after_steps
-                    and len(self.successes) == self.window
-                    and self.success_rate < self.give_up_below):
-                self.stop_reason = 'gave_up_no_progress'
-                self.stop_episode = self.episodes
-                if self.verbose:
-                    print(f'\n[stop] no progress: {self.success_rate:.0%} '
-                          f'success over the last {self.window} episodes at '
-                          f'{self.num_timesteps} steps, below the '
-                          f'{self.give_up_below:.0%} floor. Abandoning.',
-                          flush=True)
-                return False
-
             if self.max_episodes and self.episodes >= self.max_episodes:
                 self.stop_reason = 'gave_up'
                 self.stop_episode = self.episodes
@@ -160,8 +119,6 @@ class ConvergenceStopper(BaseCallback):
             final_success_rate=self.success_rate,
             window=self.window,
             threshold=self.threshold,
-            give_up_below=self.give_up_below,
-            give_up_after_steps=self.give_up_after_steps,
             # Every time training looked converged and the caller checked
             # the greedy policy. A long list means the policy kept
             # oscillating, which is worth knowing when reading the curve.

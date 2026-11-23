@@ -12,6 +12,7 @@ shapely
 astar
 tqdm
 torch
+torchvision
 gymnasium
 stable-baselines3
 jupyterlab

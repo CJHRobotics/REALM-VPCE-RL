@@ -63,7 +63,7 @@ POSES = [(0.0, 0.0, 0.0, 'centre_facing_0'),
 
 os.makedirs(OUT_DIR, exist_ok=True)
 
-robot = MyRobot()
+robot = MyRobot(enable_cnn_features=False)
 robot.load_environment(MAZE_FILE, floor_texture='carpet')
 print(f'loaded {MAZE_FILE}', flush=True)
 
