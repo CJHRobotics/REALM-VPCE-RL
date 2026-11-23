@@ -67,11 +67,8 @@ container_binds() {
 # immediately with no useful message.
 preflight() {
     echo "--- preflight: $PYTHON_BIN inside the image ---"
-    # GPU_ARGS, same as the run. Without them the container has no GPU at
-    # all, so the preflight reported "cuda False" and "nvidia-smi
-    # unavailable" while the job that followed printed "Using cuda device"
-    # -- a flat contradiction that sent a real debugging session the wrong
-    # way. Every caller runs gpu_args before preflight, so they are set.
+    # GPU_ARGS so "cuda" below reports what the RUN sees; without
+    # them the container has no GPU and the line is misleading.
     "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
         "$SIF" "$PYTHON_BIN" - <<'PYCHK'
 import sys
@@ -86,72 +83,11 @@ for m in ('numpy', 'pandas', 'h5py', 'cv2', 'matplotlib', 'PIL', 'tqdm',
         __import__(m)
     except Exception as e:
         missing.append(f'{m} ({e.__class__.__name__})')
-def _torch_report():
-    """Everything useful about torch and the GPU, or why there is none."""
+try:
     import torch
     print('  torch', torch.__version__, 'cuda', torch.cuda.is_available())
-
-    if not torch.cuda.is_available():
-        # "cuda False" on a node that clearly has a GPU is the most
-        # confusing state this setup produces, and the bare flag never says
-        # why. The two causes look identical and need different fixes.
-        built = getattr(torch.version, 'cuda', None)
-        if built is None:
-            print('  WHY NO CUDA: CPU-only torch build. Install a CUDA build.')
-            return
-        try:
-            import subprocess
-            drv = subprocess.run(
-                ['nvidia-smi', '--query-gpu=driver_version,name',
-                 '--format=csv,noheader'],
-                capture_output=True, text=True, timeout=10).stdout.strip()
-        except Exception:
-            drv = '(nvidia-smi unavailable)'
-        print(f'  WHY NO CUDA: torch built for CUDA {built}; driver {drv}')
-        if int(str(built).split('.')[0]) >= 13:
-            print('    CUDA 13 needs a 580-series driver. A CUDA 12.x build '
-                  'runs on any 525+ driver, so install one of those.')
-        return
-
-    cap = torch.cuda.get_device_capability(0)
-    print(f'  gpu   {torch.cuda.get_device_name(0)} sm_{cap[0]}{cap[1]}')
-
-    archs = torch.cuda.get_arch_list()
-    print('  torch built for:', ' '.join(archs) or '(none)')
-
-    # An exact sm_XY match is NOT required: CUDA guarantees binary
-    # compatibility forward across minor revisions within a major, so sm_60
-    # code runs on an sm_61 card. An exact-match check wrongly condemns a
-    # wheel that works.
-    def _cc(a):
-        d = a.split('_')[1]
-        return int(d[:-1]), int(d[-1])
-    ok = any(a.startswith('sm_') and _cc(a)[0] == cap[0] and _cc(a)[1] <= cap[1]
-             for a in archs)
-    ok = ok or any(a.startswith('compute_') and _cc(a) <= cap for a in archs)
-    if not ok:
-        print(f'  WARNING: no compatible code for sm_{cap[0]}{cap[1]} in this '
-              f'wheel. Expect "no kernel image is available".')
-
-    # is_available() only counts devices and creates no context, so it can
-    # say True while the first real allocation fails. That is what killed a
-    # run with cudaErrorDevicesUnavailable, so probe for real.
-    try:
-        torch.zeros(1, device='cuda')
-        print('  cuda allocation OK')
-    except Exception as e:
-        print(f'  WARNING: cuda available but allocation FAILED '
-              f'({e.__class__.__name__}: {e}).')
-        print('    Usually exclusive-process compute mode with a context '
-              'already held, or another job on the card. Training falls '
-              'back to CPU rather than dying.')
-
-
-try:
-    _torch_report()
-except Exception as e:
-    print(f'  torch report unavailable ({e.__class__.__name__}: {e})')
-
+except Exception:
+    pass
 try:
     import controller                      # Webots bindings, from PYTHONPATH
     print('  controller module OK')
