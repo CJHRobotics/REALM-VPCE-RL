@@ -235,5 +235,4 @@ Utilities for image feature extraction from the robot's camera, used for visual 
 
 | Module | Description |
 |--------|-------------|
-| `feature_extractor.py` | CNN-based feature extraction wrapper |
 | `image_feature_lib.py` | Multimodal image feature processing |

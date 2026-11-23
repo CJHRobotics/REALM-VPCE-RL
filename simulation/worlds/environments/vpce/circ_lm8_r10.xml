@@ -35,23 +35,40 @@
               texture="../protos/world_objects/textures/flags/flag_7.png"
               red="0.00" green="0.50" blue="0.50"/>
 
-    <!-- Six episode starts, 60 deg apart, alternating r = 8 and r = 5 so they
-         differ in distance to the goal as well as in bearing. The goal is at
-         the origin, so each is a different length of journey inward and sees
-         a different pair of landmarks ahead.
+    <!-- Six episode starts, alternating r = 8 and r = 5 so they differ in
+         distance to the goal as well as in bearing.
 
-         theta is cosmetic here: the VPCE observation spans all eight headings
-         so it does not depend on facing, and the action set is allocentric
-         (action k is always world bearing 45k deg), so the starting heading
-         changes neither what the agent sees nor what its actions mean. They
-         face the centre because it reads better in the path plots. -->
+         The BEARINGS are chosen rather than evenly spaced, and that is the
+         point. The action set is allocentric: action k always moves along
+         world bearing 45k degrees. So a start whose bearing to the goal is
+         a multiple of 45 can be reached by repeating ONE action, with no
+         policy at all. The first version of this file spaced the starts
+         every 60 degrees, which put two of the six (at 0 and 180) exactly
+         on action rays: 33 percent success before any training, seen as 20
+         percent and 50 percent pre-training baselines on two real runs. A
+         floor like that sits under every condition and compresses the
+         range a comparison between representations has to work in.
+
+         Six starts 60 degrees apart CANNOT all avoid this. 60 mod 45 is
+         15, so their bearings occupy residues k, k+15 and k+30 mod 45, a
+         30 degree span inside a 45 degree period, too wide to fit in the
+         window that keeps every start clear of a ray. Even spacing has to
+         give. These sit on the midpoints between action rays (22.5 + 45k),
+         maximally far from any of them: a straight run from the nearest
+         start misses the goal by 1.91 m against a 0.8 m goal radius, and
+         from the far starts by 3.06 m.
+
+         theta is cosmetic. The VPCE observation spans all eight headings so
+         it does not depend on facing, and the starting heading changes
+         neither what the agent sees nor what its actions mean. They face
+         the centre because it reads better in the path plots. -->
     <train_start_positions>
-        <pos x="  8.0000" y="  0.0000" theta="-3.1416"/>   <!--   0 deg, r = 8.0 m -->
-        <pos x="  2.5000" y="  4.3301" theta="-2.0944"/>   <!--  60 deg, r = 5.0 m -->
-        <pos x=" -4.0000" y="  6.9282" theta="-1.0472"/>   <!-- 120 deg, r = 8.0 m -->
-        <pos x=" -5.0000" y="  0.0000" theta="-0.0000"/>   <!-- 180 deg, r = 5.0 m -->
-        <pos x=" -4.0000" y=" -6.9282" theta=" 1.0472"/>   <!-- 240 deg, r = 8.0 m -->
-        <pos x="  2.5000" y=" -4.3301" theta=" 2.0944"/>   <!-- 300 deg, r = 5.0 m -->
+        <pos x="  7.3910" y="  3.0615" theta="-2.7489"/>   <!--  22.5 deg, r = 8 m -->
+        <pos x="  1.9134" y="  4.6194" theta="-1.9635"/>   <!--  67.5 deg, r = 5 m -->
+        <pos x=" -7.3910" y="  3.0615" theta="-0.3927"/>   <!-- 157.5 deg, r = 8 m -->
+        <pos x=" -4.6194" y=" -1.9134" theta=" 0.3927"/>   <!-- 202.5 deg, r = 5 m -->
+        <pos x=" -3.0615" y=" -7.3910" theta=" 1.1781"/>   <!-- 247.5 deg, r = 8 m -->
+        <pos x="  4.6194" y=" -1.9134" theta=" 2.7489"/>   <!-- 337.5 deg, r = 5 m -->
     </train_start_positions>
 
     <test_start_positions>

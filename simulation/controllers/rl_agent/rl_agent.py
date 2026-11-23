@@ -24,6 +24,9 @@ without editing anything. They are read once, at the top, and echoed:
     REALM_EVAL_ONLY   1 to load the saved model and only evaluate
     REALM_STOP_AT     success rate counting as converged       (0.8)
     REALM_MAX_EPISODES give up after this many episodes        (unlimited)
+    REALM_GIVE_UP_BELOW  abandon under this success rate       (0.10)
+    REALM_GIVE_UP_AFTER  fraction of the budget before checking (0.5)
+    REALM_DEVICE      cpu or cuda for the network             (cpu)
 
 Output goes to data/vpce/rl_runs/<tag>/: the SB3 model, the Monitor CSV of
 per-episode reward and length -- which is the learning curve, and so the
@@ -35,6 +38,30 @@ import json
 import os
 import sys
 import time
+
+# Hide the GPU from torch BEFORE anything imports it. This must stay above
+# every other import: stable_baselines3 pulls torch in, and once torch has
+# seen a device the setting no longer has any effect.
+#
+# Two reasons, and the second is the one that forced this.
+#
+# Webots holds the GPU for rendering, and the controller is a separate
+# process. On a card in exclusive-process compute mode the controller
+# cannot also create a CUDA context, so it gets cudaErrorDevicesUnavailable
+# however politely it asks.
+#
+# A visible-but-unusable device is NOT neutral. Selecting device='cpu' is
+# not enough: torch 2.14's optimizer calls torch.accelerator.current_stream()
+# unconditionally in its graph-capture health check, and torch.accelerator
+# resolves from AVAILABILITY rather than from where the tensors live. So a
+# run that had correctly fallen back to CPU still died 2048 steps in, inside
+# optimizer.step(). Hiding the device removes the whole class of problem.
+#
+# This costs essentially nothing: measured on this task the network is
+# 0.15 ms of a 118 ms environment step. Set REALM_DEVICE=cuda to opt back
+# in, which is only sensible where Webots is not holding the card.
+if os.environ.get('REALM_DEVICE', 'cpu').lower() == 'cpu':
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
 # Webots launches this from the controller's own directory, so the repo is
 # neither the working directory nor on sys.path. Resolve from __file__ and
@@ -66,6 +93,13 @@ SEED = int(os.environ.get('REALM_SEED', 0))
 EVAL_ONLY = os.environ.get('REALM_EVAL_ONLY', '0') == '1'
 STOP_AT = float(os.environ.get('REALM_STOP_AT', 0.8))
 MAX_EPISODES = int(os.environ.get('REALM_MAX_EPISODES', 0)) or None
+# Abandon a run that is clearly not learning, rather than spending the rest
+# of the budget rendering for nothing. Checked only after half the budget,
+# well past DQN's 30% exploration anneal, so it reads the policy and not
+# epsilon. Set REALM_GIVE_UP_BELOW=0 to disable.
+GIVE_UP_BELOW = float(os.environ.get('REALM_GIVE_UP_BELOW', 0.10)) or None
+GIVE_UP_AFTER = int(float(os.environ.get('REALM_GIVE_UP_AFTER', 0.5))
+                    * TIMESTEPS)
 TAG = os.environ.get(
     'REALM_RUN_TAG',
     f'{MAZE}_{ALGO.lower()}_s{SEED}' + ('_shaped' if SHAPING else ''))
@@ -75,6 +109,9 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 print(f'maze={MAZE}  algo={ALGO}  steps={TIMESTEPS}  teleport={TELEPORT}  '
       f'shaping={SHAPING}  seed={SEED}', flush=True)
+print(f'stop at {STOP_AT:.0%} success; give up below '
+      f'{GIVE_UP_BELOW if GIVE_UP_BELOW else 0:.0%} after {GIVE_UP_AFTER:,} '
+      f'steps', flush=True)
 print(f'ensemble: {ENSEMBLE}', flush=True)
 print(f'output  : {OUT_DIR}', flush=True)
 
@@ -100,7 +137,7 @@ if os.path.exists(dataset):
     observer.check_against_dataset(dataset)
     print('ensemble matches the arena dataset', flush=True)
 
-robot = MyRobot(enable_cnn_features=False)
+robot = MyRobot()
 robot.load_environment(f'simulation/worlds/environments/vpce/{MAZE}.xml',
                        floor_texture='carpet')
 
@@ -134,7 +171,11 @@ with open(f'{OUT_DIR}/config.json', 'w') as f:
                    teleport=TELEPORT, shaping=SHAPING, seed=SEED,
                    tag=TAG,
                    # Recorded so a run can be reproduced, and so a sweep
-                   # can be checked for having held them constant.
+                   # can be checked for having held them constant. The
+                   # give-up bound especially: a run it stopped is not
+                   # comparable with one that had the full budget.
+                   give_up_below=GIVE_UP_BELOW,
+                   give_up_after_steps=GIVE_UP_AFTER,
                    hyperparameters=algo_kwargs(ALGO)), f, indent=2)
 
 
@@ -152,14 +193,23 @@ def rollout(model, start_index=None):
     return bool(term), steps
 
 
-def evaluate(model, n_episodes=20):
-    """Deterministic rollouts from random starts: success rate and length."""
+def evaluate(model, n_episodes=20, label='eval'):
+    """Deterministic rollouts from random starts: success rate and length.
+
+    Reports each episode as it finishes. Ten episodes of a policy that mostly
+    truncates at 200 steps is several minutes of wall clock, and without a
+    line per episode that stretch is indistinguishable from a hang -- which
+    is exactly how it was read. collect_data.py carries the same lesson.
+    """
     wins, lengths = 0, []
-    for _ in range(n_episodes):
+    for i in range(n_episodes):
         reached, steps = rollout(model)
         if reached:
             wins += 1
             lengths.append(steps)
+        print(f'  {label} {i + 1}/{n_episodes}: '
+              f'{"reached in" if reached else "timed out after"} {steps} steps',
+              flush=True)
     return wins / n_episodes, (float(np.mean(lengths)) if lengths else float('nan'))
 
 
@@ -197,12 +247,15 @@ if EVAL_ONLY:
     rate, mean_len = evaluate(model)
     print(f'eval: success {rate:.0%}  mean steps {mean_len:.1f}', flush=True)
 else:
-    model = make_agent(ALGO, env, seed=SEED, verbose=1)
+    model = make_agent(ALGO, env, seed=SEED, verbose=1,
+                       device=os.environ.get('REALM_DEVICE', 'cpu'))
 
     # Before training, so the learning curve has a baseline. An untrained
     # policy that already solves the task would mean the task is trivial,
     # and no comparison between representations could show anything.
-    rate0, len0 = evaluate(model, n_episodes=10)
+    print('\nevaluating the untrained policy over 10 episodes for a '
+          'baseline; expect a few minutes, one line each', flush=True)
+    rate0, len0 = evaluate(model, n_episodes=10, label='baseline')
     print(f'before training: success {rate0:.0%}  mean steps {len0:.1f}',
           flush=True)
 
@@ -220,7 +273,24 @@ else:
             return 1.0
         return sum(rollout(model, start_index=i)[0] for i in range(n)) / n
 
-    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES)
+    # The give-up floor has to sit ABOVE what an untrained policy already
+    # scores, or it can never fire. Measured here: pre-training success ran
+    # 20-50% across runs, because a random walk finds a 0.8 m goal in a 10 m
+    # arena often enough. A fixed 10% floor was therefore inert on exactly
+    # the runs it existed to cut short.
+    #
+    # So it is relative to the baseline this run just measured: abandon only
+    # if, halfway through the budget, the agent is no better than it was
+    # before training. Capped at 0.5 because rate0 comes from 10 episodes
+    # and is noisy, and a high draw must not set a floor that kills a run
+    # which is genuinely learning.
+    give_up_floor = min(0.5, max(GIVE_UP_BELOW, rate0 + 0.10))
+    print(f'give up below {give_up_floor:.0%} after {GIVE_UP_AFTER:,} steps '
+          f'(untrained baseline was {rate0:.0%})', flush=True)
+
+    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES,
+                                 give_up_below=give_up_floor,
+                                 give_up_after_steps=GIVE_UP_AFTER)
 
     # Training in stretches, so the greedy policy can be checked where the
     # environment is idle. The stopper ends a stretch when the trailing
@@ -269,7 +339,7 @@ else:
           f'episodes ({stop["final_success_rate"]:.0%} success over the last '
           f'{stop["window"]})', flush=True)
 
-    rate1, len1 = evaluate(model)
+    rate1, len1 = evaluate(model, label='final eval')
     print(f'after training : success {rate1:.0%}  mean steps {len1:.1f}',
           flush=True)
     result = dict(success_before=rate0, success_after=rate1,

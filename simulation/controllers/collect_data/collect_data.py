@@ -91,7 +91,7 @@ _extractor = partial(extract_feature_dict,
                      use_color_hist=USE_COLOR_HIST,
                      use_spatial=USE_SPATIAL)
 
-robot = MyRobot(enable_cnn_features=False, cnn_extractor_model='mobilenetv3')
+robot = MyRobot()
 
 
 PROGRESS_EVERY_S = 30.0

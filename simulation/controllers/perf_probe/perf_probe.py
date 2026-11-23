@@ -56,7 +56,7 @@ def bench(label, fn, n=N):
 
 
 try:
-    robot = MyRobot(enable_cnn_features=False)
+    robot = MyRobot()
     robot.load_environment(
         f'simulation/worlds/environments/vpce/{MAZE}.xml', floor_texture='carpet')
     ts, sup = robot.timestep, robot.experiment_supervisor
