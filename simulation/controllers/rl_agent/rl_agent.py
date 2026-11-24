@@ -48,9 +48,12 @@ import time
 # Two reasons, and the second is the one that forced this.
 #
 # Webots holds the GPU for rendering, and the controller is a separate
-# process. On a card in exclusive-process compute mode the controller
-# cannot also create a CUDA context, so it gets cudaErrorDevicesUnavailable
-# however politely it asks.
+# process. When the card will not hand that process a second context the
+# controller gets cudaErrorDevicesUnavailable however politely it asks.
+# Exclusive_Process compute mode guarantees that; it is not the only way to
+# get there, and GPU3 was observed in Default mode on 2026-11-24, so do not
+# read the mode as the explanation for a given failure. agents.py lists what
+# else produces it.
 #
 # A visible-but-unusable device is NOT neutral. Selecting device='cpu' is
 # not enough: torch 2.14's optimizer calls torch.accelerator.current_stream()

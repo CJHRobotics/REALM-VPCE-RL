@@ -206,10 +206,9 @@ T_START=$(date +%s)
 #
 # Webots does not exit when its controller dies. A crashed controller leaves
 # the simulator running, and under hardware GL it keeps the CUDA context the
-# driver gave it for rendering. These cards are in exclusive-process compute
-# mode, so until it lets go nobody else can have one -- and with a 24-hour
-# walltime, a crash at minute two means 24 hours of a card held by a job that
-# already failed and will produce nothing. Job 635169, a place-field fit on
+# driver gave it for rendering, and the memory with it. With a 24-hour
+# walltime, a crash at minute two means 24 hours of an occupied card working
+# for a job that already failed and will produce nothing. Job 635169, a place-field fit on
 # another node, is what that looks like from the outside:
 # cudaErrorDevicesUnavailable, two minutes into loading a 2.6 GB dataset,
 # nothing in its log pointing anywhere useful.

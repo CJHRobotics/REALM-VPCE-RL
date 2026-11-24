@@ -2,10 +2,15 @@
 
 Webots does not stop when its controller dies. A controller that raises
 leaves the simulator running, and on a GPU node that means it keeps the CUDA
-context the driver gave it for rendering -- on a card in exclusive-process
-compute mode, which is what these are, nobody else can have one until it
-lets go. The job it belongs to has already failed and produced nothing; the
-card stays taken until the walltime expires anyway.
+context the driver gave it for rendering, and the memory with it. The job it
+belongs to has already failed and produced nothing; the card stays occupied
+until the walltime expires anyway.
+
+How much that costs the next job depends on the card's compute mode, which
+is the admin's to set and has been observed as Default on GPU3 -- where a
+second context is allowed, so a leftover Webots costs memory and throughput
+rather than the whole card. Under Exclusive_Process it costs the whole card.
+Neither is a reason to leave one running.
 
 That is how the failure gets out of the job that caused it. The next thing
 scheduled onto that node is refused a context it was correctly allocated,

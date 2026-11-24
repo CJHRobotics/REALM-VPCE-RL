@@ -360,11 +360,13 @@ def gpu_holders():
             body = f'(nvidia-smi unavailable: {exc.__class__.__name__})'
         out.append(f'{title}:')
         out += [f'  {ln}' for ln in body.splitlines()]
-    out.append('a process here that is not this job is what holds the card; '
-               'these GPUs are in')
-    out.append('exclusive-process mode, so a second context on one is '
-               'refused. Webots counts:')
-    out.append('it holds a context for rendering for as long as it runs.')
+    out.append('a process above that belongs to no live job is a leftover, '
+               'and the compute mode')
+    out.append('column says what that costs: under Exclusive_Process one '
+               'context is the limit,')
+    out.append('under Default they share. Webots counts as a holder either '
+               'way -- it keeps a')
+    out.append('context for rendering for as long as it runs.')
     return out
 
 
@@ -381,12 +383,11 @@ def pick_device(use_gpu=True, verbose=True):
         # busy. Everything above answers from the driver without creating a
         # CUDA context: is_available() counts devices, and the capability,
         # name and memory queries read properties. All of them succeed on a
-        # card that is in exclusive-process compute mode and already held by
-        # someone else. The first real ALLOCATION is what fails there, and
-        # on the fit that is seven gigabytes, reached a minute after this
-        # decision was made -- so the run died long after it could have
-        # chosen differently, with a CUDA error that read like a bug in
-        # torch. It was not: the card was taken.
+        # card that cannot actually give this process a context. The first
+        # real ALLOCATION is what fails, and on the fit that is seven
+        # gigabytes, reached a minute after this decision was made -- so the
+        # run died long after it could have chosen differently, with a CUDA
+        # error that read like a bug in torch. It was not.
         #
         # One float costs nothing and moves the decision to here. The wait
         # is for the common case on a shared node, which is a card held by

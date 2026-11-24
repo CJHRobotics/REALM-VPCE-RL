@@ -2,11 +2,16 @@
 
 Job 635169 died with cudaErrorDevicesUnavailable inside
 feature_sq_distances, after 51 s of loading a 2.6 GB dataset and building a
-7.11 GB feature matrix. Nothing was wrong with the job: these cards are in
-exclusive-process compute mode, something else held GPU3, and
-torch.cuda.is_available() does not notice -- it counts devices, and the
-capability, name and memory queries read properties. None of them creates a
-CUDA context. The first allocation does, and that is where it failed.
+7.11 GB feature matrix. Nothing was wrong with the job: the card would not
+give it a context, and torch.cuda.is_available() does not notice -- it
+counts devices, and the capability, name and memory queries read properties.
+None of them creates a CUDA context. The first allocation does, and that is
+where it failed.
+
+What made the card refuse was never established. Twenty minutes later it was
+idle, 0 MiB used, no processes, compute mode Default -- so the
+exclusive-process story told at the time does not survive the evidence, and
+the gpu_holders() report exists so the next occurrence arrives with its own.
 
 This path only runs when a card is contended, which is to say never on a
 laptop and rarely twice in a row on the cluster, so it is exactly the kind
