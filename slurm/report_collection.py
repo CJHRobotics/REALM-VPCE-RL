@@ -26,10 +26,35 @@ from realm_tools.experiment_lib.reporting import send_email   # noqa: E402
 DATA = f'{REPO}/data/vpce/collect_data'
 ENVS = f'{REPO}/simulation/worlds/environments/vpce'
 
+sys.path.insert(0, REPO)
+from realm_tools.simulation_lib.arena_paths import (                # noqa: E402
+    arena_positions, arena_xml)
+
+
+def _xml(maze):
+    """The arena's world file, or where it would be if it existed.
+
+    The lookup raises for a name it cannot place; this report is written
+    after a job has already run and must not die describing it, so an
+    unresolvable name falls back to a path the callers already test with
+    os.path.exists.
+    """
+    try:
+        return arena_xml(maze, REPO)
+    except Exception:                                       # noqa: BLE001
+        return f'{ENVS}/{maze}.xml'
+
+
+def _grid(maze):
+    try:
+        return arena_positions(maze, REPO)
+    except Exception:                                       # noqa: BLE001
+        return f'{ENVS}/positions/{maze}_positions.csv'
+
 
 def arena(maze):
     """Geometry and landmarks from the world file, for context in the mail."""
-    path = f'{ENVS}/{maze}.xml'
+    path = _xml(maze)
     if not os.path.exists(path):
         return '  (world file not found)'
     root = ET.parse(path).getroot()
@@ -57,10 +82,10 @@ POSITIONS_FALLBACK = 'circ_lm8_r3_positions.csv'
 
 
 def grid(maze):
-    csv = f'{ENVS}/positions/{maze}_positions.csv'
+    csv = _grid(maze)
     shared = ''
     if not os.path.exists(csv):
-        csv = f'{ENVS}/positions/{POSITIONS_FALLBACK}'
+        csv = os.path.join(os.path.dirname(csv), POSITIONS_FALLBACK)
         shared = f'  (shared: {POSITIONS_FALLBACK})'
     if not os.path.exists(csv):
         return '  (position grid not found)'
@@ -74,9 +99,9 @@ def grid(maze):
 
 
 def grid_size(maze):
-    csv = f'{ENVS}/positions/{maze}_positions.csv'
+    csv = _grid(maze)
     if not os.path.exists(csv):
-        csv = f'{ENVS}/positions/{POSITIONS_FALLBACK}'
+        csv = os.path.join(os.path.dirname(csv), POSITIONS_FALLBACK)
     if not os.path.exists(csv):
         return None
     import pandas as pd

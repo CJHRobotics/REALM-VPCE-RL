@@ -35,6 +35,8 @@ import traceback
 import numpy as np
 
 from realm_tools.robot_lib.my_robot import MyRobot
+from realm_tools.simulation_lib.arena_paths import (arena_positions,
+                                                     arena_xml)
 from realm_tools.experiment_lib.reporting import send_email
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r0')
@@ -58,7 +60,7 @@ def bench(label, fn, n=N):
 try:
     robot = MyRobot()
     robot.load_environment(
-        f'simulation/worlds/environments/vpce/{MAZE}.xml', floor_texture='carpet')
+        arena_xml(MAZE), floor_texture='carpet')
     ts, sup = robot.timestep, robot.experiment_supervisor
     hdr = (f'perf probe | {MAZE} | cpus {os.cpu_count()} | '
            f'alloc {os.environ.get("SLURM_CPUS_PER_TASK", "?")} | '

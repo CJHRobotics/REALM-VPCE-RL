@@ -42,6 +42,8 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 from realm_tools.robot_lib.my_robot import MyRobot
+from realm_tools.simulation_lib.arena_paths import (arena_positions,
+                                                     arena_xml)
 from realm_tools.experiment_lib.reporting import send_email
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r3')
@@ -52,7 +54,7 @@ SUF = f'_{TAG}' if TAG else ''
 # Captures used for the timing estimate. Three poses is enough to see whether
 # the renderer works and far too few to time it.
 TIMED_N = int(os.environ.get('REALM_TIMED_N', '10'))
-MAZE_FILE = f'simulation/worlds/environments/vpce/{MAZE}.xml'
+MAZE_FILE = arena_xml(MAZE)
 OUT_DIR = 'data_cache/render_check'
 
 # Centre, off-centre, and near the wall: enough to tell a real render from a
@@ -126,7 +128,7 @@ rng = np.random.default_rng(0)
 # so this measures what a collection run would actually do and works for any
 # geometry, corridor included.
 import pandas as pd
-grid_csv = f'simulation/worlds/environments/vpce/positions/{MAZE}_positions.csv'
+grid_csv = arena_positions(MAZE)
 if os.path.exists(grid_csv):
     grid = pd.read_csv(grid_csv)
     sample = grid.sample(n=min(TIMED_N, len(grid)), random_state=0)
@@ -137,7 +139,7 @@ else:
     # timing is what this run exists to measure, and losing it to a missing
     # CSV would be a poor trade.
     import xml.etree.ElementTree as _ET
-    _root = _ET.parse(f'simulation/worlds/environments/vpce/{MAZE}.xml').getroot()
+    _root = _ET.parse(MAZE_FILE).getroot()
     _cw = _root.findall('circular_wall')
     if _cw:
         _R = float(_cw[0].get('radius')) - 0.4

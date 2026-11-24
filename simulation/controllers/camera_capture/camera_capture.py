@@ -14,11 +14,13 @@ import pandas as pd
 from PIL import Image
 
 from realm_tools.robot_lib.my_robot import MyRobot
+from realm_tools.simulation_lib.arena_paths import (arena_positions,
+                                                     arena_xml)
 
 
 MAZE = 'corr_lm8_l10w2'
-MAZE_FILE = f'simulation/worlds/environments/vpce/{MAZE}.xml'
-POSITIONS_FILE = f'simulation/worlds/environments/vpce/positions/{MAZE}_positions.csv'
+MAZE_FILE = arena_xml(MAZE)
+POSITIONS_FILE = arena_positions(MAZE)
 OUTPUT_DIR = 'data_cache/camera_capture'
 
 # Pick from the central box spanning this fraction of the arena on each axis.
