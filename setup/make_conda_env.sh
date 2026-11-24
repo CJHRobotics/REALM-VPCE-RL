@@ -27,6 +27,11 @@
 #   bash setup/make_conda_env.sh realm-vpce-rl2     # side by side, to test
 #   FORCE=1 bash setup/make_conda_env.sh            # replace an existing one
 #
+# FORCE=1 removes the named environment before rebuilding. It refuses to
+# touch realm-vpce whatever is passed: that is the place-field paper's
+# environment, it is the one proved to work on these cards, and losing it to
+# a typo would cost more than anything this repo contains.
+#
 # Building under a second name costs nothing and keeps the old environment
 # until the new one is proven: every job script takes CONDA_ENV_NAME, and
 # REALM_PY overrides it outright.
@@ -46,6 +51,21 @@ cd "$REPO_DIR"
 BASE="$(conda info --base 2>/dev/null || echo /apps/anaconda3)"
 # shellcheck disable=SC1091
 source "$BASE/etc/profile.d/conda.sh"
+
+# The place-field paper's environment is not this script's to touch. It is
+# the one that demonstrably works on these cards, it is what that paper's
+# results were produced with, and _webots_env.sh says in as many words that
+# it is deliberately left alone. FORCE=1 exists to replace THIS repo's
+# environment; it must not become a way to lose that one to a typo.
+PROTECTED="${PROTECTED_ENVS:-realm-vpce}"
+for guarded in $PROTECTED; do
+    if [[ "$ENV_NAME" == "$guarded" ]]; then
+        echo "ERROR: '$ENV_NAME' is the place-field paper's environment." >&2
+        echo "       This script will not create or replace it. Use a name" >&2
+        echo "       belonging to this repo, such as realm-vpce-rl." >&2
+        exit 1
+    fi
+done
 
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
     if [[ "${FORCE:-0}" != "1" ]]; then
