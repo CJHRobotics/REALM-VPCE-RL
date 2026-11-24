@@ -11,6 +11,22 @@ pygame
 shapely
 astar
 tqdm
+# Pin torch, and pin it to a build that has kernels for the cards this
+# cluster actually has. Unpinned, this file installed 2.14.1+cu126 into
+# realm-vpce-rl, whose arch list is sm_50, sm_60, sm_70, sm_75, sm_80,
+# sm_86, sm_90 -- and the nodes that are always free are 1080 Tis at
+# sm_61. Every CUDA failure in this repo traces back to that line.
+#
+# The place-field repo this was forked from has the same unpinned `torch`
+# and a working environment, because it was installed earlier and got an
+# earlier wheel. That is not a difference anyone chose, and leaving it
+# unpinned means the next person to rebuild the environment gets whatever
+# is current that day. Pin it to what is measured to work here.
+#
+# FILL THIS IN from the environment that works:
+#   conda activate realm-vpce
+#   python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list())"
+# then put that version below and reinstall realm-vpce-rl against it.
 torch
 gymnasium
 stable-baselines3

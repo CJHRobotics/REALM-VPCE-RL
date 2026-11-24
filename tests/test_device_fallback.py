@@ -53,10 +53,14 @@ class FakeCard:
         self.env = {}
 
     def __enter__(self):
-        for k, v in (('REALM_GPU_WAIT', self.wait),
+        for k, v in ((('REALM_GPU_WAIT', self.wait)
+                      if self.wait is not None else ('REALM_GPU_WAIT', '')),
                      ('REALM_REQUIRE_GPU', os.environ.get('REALM_REQUIRE_GPU', '0'))):
             self.env[k] = os.environ.get(k)
-            os.environ[k] = v
+            if v == '':
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         self.saved = {
             'is_available': torch.cuda.is_available,
             'get_device_capability': torch.cuda.get_device_capability,
@@ -143,22 +147,34 @@ def test_a_busy_card_is_waited_for():
     return f'a busy card is retried for REALM_GPU_WAIT ({waited:.1f}s)'
 
 
-def test_a_card_the_wheel_cannot_target_is_refused_at_once():
-    """The real cause of job 635251, and the one waiting cannot fix.
+def test_an_unlisted_arch_is_tried_anyway():
+    """The arch list is evidence, not a verdict.
 
-    The card allocates fine for anything built for it. What it cannot do is
-    run kernels that were never compiled for sm_61 -- and no amount of
-    retrying changes that, so the wait must not even start.
+    CUDA binary compatibility runs upward within a generation, so sm_60
+    cubins load on a 6.1 device, and 1080 Tis are reported running cu126
+    wheels whose arch list omits sm_61. Refusing on the list alone would
+    strand a card that works.
     """
-    import time
     wheel = ['sm_50', 'sm_60', 'sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90']
     with FakeCard(allocatable=True, wait='30', arches=wheel):
+        dev = R.pick_device(use_gpu=True, verbose=False)
+    assert str(dev).startswith('cuda'), (
+        f'a card that allocates was refused on its arch list alone: {dev}')
+    return 'an unlisted arch that still allocates is used'
+
+
+def test_an_unlisted_arch_that_fails_does_not_wait():
+    """If the arch is why, retrying cannot help; if it is not, nothing is
+    holding a card this idle either. Either way, do not spend the minute."""
+    import time
+    wheel = ['sm_50', 'sm_60', 'sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90']
+    with FakeCard(allocatable=False, wait=None, arches=wheel):
         t0 = time.time()
         dev = R.pick_device(use_gpu=True, verbose=False)
         took = time.time() - t0
-    assert str(dev) == 'cpu', f'sm_61 against {wheel} returned {dev}'
-    assert took < 2, f'waited {took:.1f}s for something waiting cannot fix'
-    return 'an arch the wheel lacks falls back immediately, without the wait'
+    assert str(dev) == 'cpu', dev
+    assert took < 20, f'waited {took:.1f}s on an arch gap'
+    return f'an arch gap shortens the wait ({took:.1f}s, not 60)'
 
 
 def test_no_gpu_is_honoured():

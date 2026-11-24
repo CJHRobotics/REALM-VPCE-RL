@@ -379,37 +379,28 @@ def pick_device(use_gpu=True, verbose=True):
         cap = torch.cuda.get_device_capability(0)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        # Does this wheel have kernels for THIS card? Checked before the
-        # allocation probe, because the answer decides whether waiting makes
-        # any sense. GPU3 is a 1080 Ti, sm_61; torch 2.14.1+cu126 ships
-        # ['sm_50','sm_60','sm_70','sm_75','sm_80','sm_86','sm_90'] and no
-        # PTX, so there is nothing to run and nothing to JIT from -- wheel
-        # compatibility is forward-only. The card reports this as
-        # cudaErrorDevicesUnavailable, which reads like contention and is
-        # not: job 635251 waited a minute for a card that was idle, free,
-        # and would never have worked. cuCtxCreate succeeds on it from
-        # ctypes; see slurm/gpu_check.sh.
+        # Does this wheel have kernels for THIS card? Worth knowing, but
+        # NOT decisive, and the difference matters.
         #
-        # The fix is a build that has the arch, or a card that is in the
-        # list. sm_89 (L40S) is missing from the same wheel, so "newer" is
-        # not the test -- membership is.
+        # GPU3 is a 1080 Ti at sm_61; torch 2.14.1+cu126 lists sm_50, sm_60,
+        # sm_70, sm_75, sm_80, sm_86, sm_90. A missing arch is the obvious
+        # reading -- except CUDA binary compatibility runs upward within a
+        # major generation, so sm_60 cubins are loadable on a 6.1 device,
+        # and 1080 Tis are reported in the wild running cu126 wheels whose
+        # arch list omits sm_61. So the list alone does not prove the card
+        # unusable; only trying does.
+        #
+        # What it does buy is an explanation ready for when the allocation
+        # fails, and a reason not to spend a minute retrying: if the arch is
+        # the cause, waiting cannot fix it, and if it is not, a card this
+        # idle was never busy either.
         arches = list(torch.cuda.get_arch_list())
         mine = f'sm_{cap[0]}{cap[1]}'
-        if arches and mine not in arches:
-            msg = (f'this torch has no kernels for {mine}: built for CUDA '
-                   f'{torch.version.cuda} with {", ".join(arches)}')
-            if verbose:
-                print(f'  device: {msg}')
-                print(f'    {torch.cuda.get_device_name(0)} is {mine}, and '
-                      f'wheel compatibility is forward-only, so')
-                print('    this will not work however long it is retried. '
-                      'Use a card whose arch is in')
-                print('    that list, or install a build that has this one.')
-            if os.environ.get('REALM_REQUIRE_GPU', '0') == '1':
-                raise RuntimeError(msg + '  (REALM_REQUIRE_GPU=1)')
-            if verbose:
-                print('  device: cpu (falling back)')
-            return torch.device('cpu')
+        arch_gap = bool(arches) and mine not in arches
+        if arch_gap and verbose:
+            print(f'  device: this torch lists no {mine} kernels '
+                  f'(built for CUDA {torch.version.cuda}, has '
+                  f'{", ".join(arches)}); trying anyway')
 
         # PROVE the device before returning it, and WAIT for it if it is
         # busy. Everything above answers from the driver without creating a
@@ -425,7 +416,7 @@ def pick_device(use_gpu=True, verbose=True):
         # is for the common case on a shared node, which is a card held by
         # something that is about to finish; a card held by a 24-hour job
         # will not come free and the log says who has it instead.
-        wait = float(os.environ.get('REALM_GPU_WAIT', 60))
+        wait = float(os.environ.get('REALM_GPU_WAIT', 5 if arch_gap else 60))
         deadline = time.time() + wait
         held = None
         while True:
@@ -446,6 +437,11 @@ def pick_device(use_gpu=True, verbose=True):
             msg = (f'cuda is present but unusable after {wait:g}s: '
                    f'{held.__class__.__name__}: '
                    f'{str(held).splitlines()[0]}')
+            if arch_gap:
+                msg += (f'  -- and this torch lists no {mine} kernels, which '
+                        f'is the likeliest reason: install a build that has '
+                        f'{mine}, or use a card whose arch is in '
+                        f'{", ".join(arches)}')
             if verbose:
                 print(f'  device: {msg}')
                 for line in gpu_holders():
@@ -461,6 +457,10 @@ def pick_device(use_gpu=True, verbose=True):
 
         dev = torch.device('cuda')
         if verbose:
+            if arch_gap:
+                print(f'  device: {mine} works despite not being listed '
+                      f'(binary compatibility runs upward within a '
+                      f'generation)')
             name = torch.cuda.get_device_name(0)
             mem = torch.cuda.get_device_properties(0).total_memory / 1e9
             tf32 = 'active' if cap[0] >= 8 else 'unavailable (pre-Ampere)'
