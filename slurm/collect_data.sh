@@ -185,7 +185,7 @@ WEBOTS_TIMEOUT="${WEBOTS_TIMEOUT:-84000}"
 
 set +e
 timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
-"$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" --env REALM_MAZES="${REALM_MAZES:-}" --env LP_NUM_THREADS="$LP_NUM_THREADS" \
+"$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-vpce}" --env REALM_MAZES="${REALM_MAZES:-}" --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \
     xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" webots --batch --stdout --stderr --mode=fast --minimize --port="$WEBOTS_PORT" "$WORLD"
 STATUS=$?

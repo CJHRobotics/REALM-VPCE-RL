@@ -199,7 +199,11 @@ def main():
     keys = ch.CHANNEL_SETS[args.channels]
 
     data_path = f'{REPO}/data/vpce/collect_data/{args.arena}.h5'
-    xml_path = f'{REPO}/simulation/worlds/environments/vpce/{args.arena}.xml'
+    # REALM_ARENA_DIR picks the environments directory, so an obstacle
+    # arena under vpce-rl fits with the same command as a vpce one.
+    arena_dir = os.environ.get('REALM_ARENA_DIR', 'vpce').strip('/')
+    xml_path = (f'{REPO}/simulation/worlds/environments/'
+                f'{arena_dir}/{args.arena}.xml')
     out_path = args.out or (f'{REPO}/data/vpce/place_fields/'
                             f'{args.arena}_{args.channels}.h5')
 

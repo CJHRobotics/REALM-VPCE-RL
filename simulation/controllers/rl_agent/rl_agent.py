@@ -12,6 +12,7 @@ Configured by environment variables, so a SLURM job can sweep conditions
 without editing anything. They are read once, at the top, and echoed:
 
     REALM_MAZE        arena to load                  (circ_lm8_r10)
+    REALM_ARENA_DIR   environments/<dir> it lives in (vpce)
     REALM_ENSEMBLE    place-field .h5 to observe through
                       (data/vpce/place_fields/<maze>_visual.h5)
     REALM_TIMESTEPS   training steps                 (100000)
@@ -82,6 +83,10 @@ from realm_tools.rl_lib.agents import make_agent, algo_kwargs
 from realm_tools.rl_lib.callbacks import ConvergenceStopper
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r10')
+# Which environments directory the arena lives in. `vpce` is the place-field
+# paper's sweep of empty enclosures; `vpce-rl` holds the obstacle arenas.
+ARENA_DIR = os.environ.get('REALM_ARENA_DIR', 'vpce').strip('/')
+ARENA_XML = f'simulation/worlds/environments/{ARENA_DIR}/{MAZE}.xml'
 ENSEMBLE = os.environ.get(
     'REALM_ENSEMBLE', f'data/vpce/place_fields/{MAZE}_visual.h5')
 TIMESTEPS = int(os.environ.get('REALM_TIMESTEPS', 100_000))
@@ -138,8 +143,7 @@ if os.path.exists(dataset):
     print('ensemble matches the arena dataset', flush=True)
 
 robot = MyRobot()
-robot.load_environment(f'simulation/worlds/environments/vpce/{MAZE}.xml',
-                       floor_texture='carpet')
+robot.load_environment(ARENA_XML, floor_texture='carpet')
 
 env = WebotsEnv(
     robot, observer,
@@ -354,8 +358,7 @@ else:
         from realm_tools.rl_lib import path_plots
         paths = rollout_every_start(model)
         if paths:
-            xml_root = ET.parse(
-                f'simulation/worlds/environments/vpce/{MAZE}.xml').getroot()
+            xml_root = ET.parse(ARENA_XML).getroot()
             gx, gy = robot.maze.get_goal_location()
             png, psum = path_plots.plot_paths(
                 paths, xml_root, f'{OUT_DIR}/final_paths.png',

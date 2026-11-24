@@ -160,6 +160,17 @@ WEBOTS_PORT=$(( 10000 + (${SLURM_JOB_ID:-0} % 20000) ))
 XVFB_DISPLAY=$(( 100 + (${SLURM_JOB_ID:-0} % 400) ))
 
 USE_GPU="${USE_GPU:-1}"
+# STRICT_GPU defaults ON here, and only here. gl_info's own default is to warn
+# and fall back to software rendering, which is right for collection -- it
+# finishes, slowly -- and wrong for this job: a step is 9 renders, so llvmpipe
+# turns a 42-minute run into roughly ten days, and the job spends its whole
+# walltime producing a partial curve. Worse, the fallback is INTERMITTENT. The
+# probe runs under `xvfb-run -a` and races, so the same node returned no
+# renderer on jobs 632261 and 632489 and the 1080 Ti on 632586. A coin flip
+# between 42 minutes and ten days is not something to discover from a timing.
+# Aborting costs twenty seconds and a resubmit. Set STRICT_GPU=0 to accept the
+# software path deliberately.
+export STRICT_GPU="${STRICT_GPU:-1}"
 gpu_args
 gl_info || exit 1
 
@@ -196,6 +207,7 @@ T_START=$(date +%s)
 set +e
 "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
     --env REALM_MAZE="$ARENA" \
+    --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-vpce}" \
     --env REALM_ENSEMBLE="$ENSEMBLE" \
     --env REALM_RUN_TAG="$TAG" \
     --env REALM_TIMESTEPS="${REALM_TIMESTEPS:-100000}" \

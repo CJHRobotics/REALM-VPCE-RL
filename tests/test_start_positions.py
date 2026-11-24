@@ -25,11 +25,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from realm_tools.simulation_lib.environment_parser import parse_environment
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ARENA_DIR = f'{REPO}/simulation/worlds/environments/vpce'
+# Both environment directories. `vpce` is the place-field paper's sweep of
+# empty enclosures; `vpce-rl` holds the obstacle arenas the RL work uses. The
+# rule these tests enforce is a property of the ACTION SET, which both share,
+# so neither directory is exempt from it.
+ARENA_DIRS = [f'{REPO}/simulation/worlds/environments/vpce',
+              f'{REPO}/simulation/worlds/environments/vpce-rl']
+
+
+def arena_files():
+    out = []
+    for d in ARENA_DIRS:
+        out += sorted(glob.glob(f'{d}/*.xml'))
+    return out
 
 N_ACTIONS = 8
 ACTION_LENGTH = 0.5        # MyRobot default
 GOAL_RADIUS = 0.8          # HamBot.check_at_goal
+# get_possible_actions clears an action only when the 45-degree sector ahead
+# is free to action_length + 0.25, so this is the width of a gap the agent
+# will actually enter.
+CLEARANCE = 0.75
 
 
 def straight_line_miss(start, goal):
@@ -44,22 +60,22 @@ def straight_line_miss(start, goal):
 
 
 def arenas_with_starts():
-    for path in sorted(glob.glob(f'{ARENA_DIR}/*.xml')):
+    for path in arena_files():
         try:
-            _w, _cw, _lm, goals, train, _test = parse_environment(path)
+            walls, _cw, _lm, goals, train, _test = parse_environment(path)
         except Exception as exc:                            # noqa: BLE001
             raise AssertionError(f'{os.path.basename(path)} does not parse: '
                                  f'{exc}')
         # Only arenas configured for RL: a single default start at the
         # origin is the unconfigured state, not a claim about the task.
         if goals and len(train) > 1:
-            yield os.path.basename(path), goals[0], train
+            yield os.path.basename(path), goals[0], train, walls
 
 
 def test_every_arena_xml_parses():
     """A stray double hyphen in a comment invalidates the whole file."""
     n = 0
-    for path in sorted(glob.glob(f'{ARENA_DIR}/*.xml')):
+    for path in arena_files():
         parse_environment(path)
         n += 1
     assert n > 0, 'no arena XML found'
@@ -68,7 +84,7 @@ def test_every_arena_xml_parses():
 
 def test_no_start_is_solvable_by_a_constant_action():
     checked = 0
-    for name, goal, starts in arenas_with_starts():
+    for name, goal, starts, _walls in arenas_with_starts():
         g = (goal['x'], goal['y'])
         for i, p in enumerate(starts):
             r, off, miss = straight_line_miss((p['x'], p['y']), g)
@@ -84,7 +100,7 @@ def test_no_start_is_solvable_by_a_constant_action():
 def test_starts_are_reachable_at_all():
     """The opposite failure: a start the agent cannot get to the goal from."""
     checked = 0
-    for name, goal, starts in arenas_with_starts():
+    for name, goal, starts, _walls in arenas_with_starts():
         g = (goal['x'], goal['y'])
         for i, p in enumerate(starts):
             r = math.hypot(p['x'] - g[0], p['y'] - g[1])
@@ -103,7 +119,7 @@ def test_starts_are_reachable_at_all():
 
 def test_starts_spread_around_the_arena():
     """Starts clustered on one side teach only one approach direction."""
-    for name, goal, starts in arenas_with_starts():
+    for name, goal, starts, _walls in arenas_with_starts():
         g = (goal['x'], goal['y'])
         bearings = sorted(math.degrees(math.atan2(p['y'] - g[1],
                                                   p['x'] - g[0])) % 360
@@ -113,6 +129,41 @@ def test_starts_spread_around_the_arena():
             f'{name} leaves a {max(gaps):.0f} degree gap with no start in '
             f'it; the agent never approaches from that side')
     return f'largest bearing gap {max(gaps):.0f} deg'
+
+
+def point_seg_dist(px, py, w):
+    """Distance from a point to one <wall> segment."""
+    ax, ay, bx, by = w['x1'], w['y1'], w['x2'], w['y2']
+    dx, dy = bx - ax, by - ay
+    den = dx * dx + dy * dy
+    t = 0.0 if den < 1e-12 else max(0.0, min(1.0, ((px - ax) * dx +
+                                                   (py - ay) * dy) / den))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def test_starts_and_goal_are_clear_of_obstacles():
+    """An arena with furniture must not park a start inside it.
+
+    A start wedged against an obstacle has most of its action mask closed on
+    the first step, and a goal with an obstacle across it can be unreachable
+    from one side without anything in the file looking wrong.
+    """
+    checked = 0
+    for name, goal, starts, walls in arenas_with_starts():
+        obstacles = [w for w in walls if w.get('wall_type') == 'obstacle']
+        if not obstacles:
+            continue
+        g = (goal['x'], goal['y'])
+        places = [('goal', g)] + [(f'start {i}', (p['x'], p['y']))
+                                  for i, p in enumerate(starts)]
+        for label, (x, y) in places:
+            d = min(point_seg_dist(x, y, w) for w in obstacles)
+            assert d >= CLEARANCE, (
+                f'{name} {label} is {d:.2f} m from an obstacle, inside the '
+                f'{CLEARANCE} m the action mask needs to move')
+            checked += 1
+    return (f'{checked} places clear of obstacles' if checked
+            else 'no arena with obstacles')
 
 
 def main():

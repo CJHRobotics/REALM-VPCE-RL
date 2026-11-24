@@ -26,7 +26,14 @@ from realm_tools.experiment_lib.loggers.visual_data_set import PovDataset
 from realm_tools.image_lib.image_feature_lib import extract_feature_dict
 
 
-maze_file_dir = 'simulation/worlds/environments/vpce/'
+# Which environments directory to collect from. `vpce` is the place-field
+# paper's nine-arena sweep, empty enclosures whose datasets that paper rests
+# on; `vpce-rl` holds the obstacle arenas the RL work uses. They are kept
+# apart so a dataset from one is never mistaken for a dataset from the other,
+# and the choice is an environment variable so one SLURM job can collect from
+# either without an edit.
+ARENA_DIR = os.environ.get('REALM_ARENA_DIR', 'vpce').strip('/')
+maze_file_dir = f'simulation/worlds/environments/{ARENA_DIR}/'
 
 # The arenas this experiment uses. Three discs spanning 11.1x in area
 # against Harland's 8.8x, at fixed shape and fixed landmark count, a 10 x 2 m
