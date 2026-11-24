@@ -45,8 +45,9 @@ class FakeCard:
     absurd in a test.
     """
 
-    def __init__(self, allocatable, wait='0'):
+    def __init__(self, allocatable, wait='0', arches=('sm_61',)):
         self.allocatable = allocatable
+        self.arches = list(arches)
         self.wait = wait
         self.saved = {}
         self.env = {}
@@ -61,6 +62,7 @@ class FakeCard:
             'get_device_capability': torch.cuda.get_device_capability,
             'get_device_name': torch.cuda.get_device_name,
             'get_device_properties': torch.cuda.get_device_properties,
+            'get_arch_list': torch.cuda.get_arch_list,
             'zeros': torch.zeros,
         }
         real_zeros = self.saved['zeros']
@@ -83,6 +85,7 @@ class FakeCard:
         torch.cuda.is_available = lambda: True
         torch.cuda.get_device_capability = lambda i=0: (6, 1)
         torch.cuda.get_device_name = lambda i=0: 'FakeCard'
+        torch.cuda.get_arch_list = lambda: list(self.arches)
         torch.cuda.get_device_properties = lambda i=0: Props()
         torch.zeros = zeros
         return self
@@ -97,6 +100,7 @@ class FakeCard:
         torch.cuda.get_device_capability = self.saved['get_device_capability']
         torch.cuda.get_device_name = self.saved['get_device_name']
         torch.cuda.get_device_properties = self.saved['get_device_properties']
+        torch.cuda.get_arch_list = self.saved['get_arch_list']
         torch.zeros = self.saved['zeros']
         return False
 
@@ -137,6 +141,24 @@ def test_a_busy_card_is_waited_for():
         waited = time.time() - t0
     assert waited >= 2.5, f'gave up after {waited:.1f}s, expected ~3'
     return f'a busy card is retried for REALM_GPU_WAIT ({waited:.1f}s)'
+
+
+def test_a_card_the_wheel_cannot_target_is_refused_at_once():
+    """The real cause of job 635251, and the one waiting cannot fix.
+
+    The card allocates fine for anything built for it. What it cannot do is
+    run kernels that were never compiled for sm_61 -- and no amount of
+    retrying changes that, so the wait must not even start.
+    """
+    import time
+    wheel = ['sm_50', 'sm_60', 'sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90']
+    with FakeCard(allocatable=True, wait='30', arches=wheel):
+        t0 = time.time()
+        dev = R.pick_device(use_gpu=True, verbose=False)
+        took = time.time() - t0
+    assert str(dev) == 'cpu', f'sm_61 against {wheel} returned {dev}'
+    assert took < 2, f'waited {took:.1f}s for something waiting cannot fix'
+    return 'an arch the wheel lacks falls back immediately, without the wait'
 
 
 def test_no_gpu_is_honoured():

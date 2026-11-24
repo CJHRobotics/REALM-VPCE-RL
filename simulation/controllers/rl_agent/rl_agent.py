@@ -47,13 +47,15 @@ import time
 #
 # Two reasons, and the second is the one that forced this.
 #
-# Webots holds the GPU for rendering, and the controller is a separate
-# process. When the card will not hand that process a second context the
-# controller gets cudaErrorDevicesUnavailable however politely it asks.
-# Exclusive_Process compute mode guarantees that; it is not the only way to
-# get there, and GPU3 was observed in Default mode on 2026-11-24, so do not
-# read the mode as the explanation for a given failure. agents.py lists what
-# else produces it.
+# This torch has no kernels for the cards that can render. Measured on
+# 2026-11-24 by slurm/gpu_check.sh: torch 2.14.1+cu126 ships sm_50, sm_60,
+# sm_70, sm_75, sm_80, sm_86, sm_90 and no PTX, while the render nodes are
+# 1080 Tis at sm_61. Wheel compatibility is forward-only, so there is
+# nothing to run and nothing to JIT from. The card reports it as
+# cudaErrorDevicesUnavailable, which reads like something else holding the
+# GPU -- it is not: cuCtxCreate succeeds on the same card from ctypes while
+# the card sits idle at 0 MiB. An earlier version of this comment blamed
+# exclusive-process compute mode; that was a guess, and the mode is Default.
 #
 # A visible-but-unusable device is NOT neutral. Selecting device='cpu' is
 # not enough: torch 2.14's optimizer calls torch.accelerator.current_stream()

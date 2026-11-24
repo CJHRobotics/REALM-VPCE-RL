@@ -379,6 +379,38 @@ def pick_device(use_gpu=True, verbose=True):
         cap = torch.cuda.get_device_capability(0)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        # Does this wheel have kernels for THIS card? Checked before the
+        # allocation probe, because the answer decides whether waiting makes
+        # any sense. GPU3 is a 1080 Ti, sm_61; torch 2.14.1+cu126 ships
+        # ['sm_50','sm_60','sm_70','sm_75','sm_80','sm_86','sm_90'] and no
+        # PTX, so there is nothing to run and nothing to JIT from -- wheel
+        # compatibility is forward-only. The card reports this as
+        # cudaErrorDevicesUnavailable, which reads like contention and is
+        # not: job 635251 waited a minute for a card that was idle, free,
+        # and would never have worked. cuCtxCreate succeeds on it from
+        # ctypes; see slurm/gpu_check.sh.
+        #
+        # The fix is a build that has the arch, or a card that is in the
+        # list. sm_89 (L40S) is missing from the same wheel, so "newer" is
+        # not the test -- membership is.
+        arches = list(torch.cuda.get_arch_list())
+        mine = f'sm_{cap[0]}{cap[1]}'
+        if arches and mine not in arches:
+            msg = (f'this torch has no kernels for {mine}: built for CUDA '
+                   f'{torch.version.cuda} with {", ".join(arches)}')
+            if verbose:
+                print(f'  device: {msg}')
+                print(f'    {torch.cuda.get_device_name(0)} is {mine}, and '
+                      f'wheel compatibility is forward-only, so')
+                print('    this will not work however long it is retried. '
+                      'Use a card whose arch is in')
+                print('    that list, or install a build that has this one.')
+            if os.environ.get('REALM_REQUIRE_GPU', '0') == '1':
+                raise RuntimeError(msg + '  (REALM_REQUIRE_GPU=1)')
+            if verbose:
+                print('  device: cpu (falling back)')
+            return torch.device('cpu')
+
         # PROVE the device before returning it, and WAIT for it if it is
         # busy. Everything above answers from the driver without creating a
         # CUDA context: is_available() counts devices, and the capability,
