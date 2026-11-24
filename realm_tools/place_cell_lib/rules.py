@@ -345,6 +345,34 @@ def pick_device(use_gpu=True, verbose=True):
         cap = torch.cuda.get_device_capability(0)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        # PROVE the device before returning it. Everything above answers
+        # from the driver without creating a CUDA context: is_available()
+        # counts devices, and the capability, name and memory queries read
+        # properties. All of them succeed on a card that is in
+        # exclusive-process compute mode and already held by someone else.
+        # The first real ALLOCATION is what fails there, and on this job
+        # that is 7 GB of features, reached after a minute of loading and
+        # scaling the dataset -- so the run dies long after it could have
+        # chosen differently, with a CUDA error that reads like a bug.
+        #
+        # One float costs nothing and moves that decision to here. Same
+        # lesson as a3981b3 on the RL side: a visible device is not a
+        # usable one.
+        try:
+            torch.zeros(1, device='cuda')
+        except Exception as exc:                            # noqa: BLE001
+            if verbose:
+                print(f'  device: cuda is present but unusable '
+                      f'({exc.__class__.__name__}: '
+                      f'{str(exc).splitlines()[0]})')
+                print('    Usually another process holds the card: these '
+                      'GPUs are in exclusive-process')
+                print('    compute mode, so a second CUDA context on the '
+                      'same card is refused. Resubmitting')
+                print('    may land on a free one; --gres=gpu:A40:1 asks '
+                      'for a compute card instead.')
+                print('  device: cpu (falling back)')
+            return torch.device('cpu')
         dev = torch.device('cuda')
         if verbose:
             name = torch.cuda.get_device_name(0)
