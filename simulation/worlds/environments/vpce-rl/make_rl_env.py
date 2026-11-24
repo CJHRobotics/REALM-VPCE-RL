@@ -632,11 +632,7 @@ def plot(segs, start_xy, paths, path_png):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 7))
 
     _draw_arena(ax1, segs, start_xy)
-    ax1.set_title(f'A   {NAME}\n'
-                  f'r = {RADIUS:g} m  |  {N_LANDMARKS} landmarks  |  '
-                  f'{N_OBSTACLES} obstacles  |  goal at the origin\n'
-                  f'obstacles are caution-tape textured, the perimeter is '
-                  f'flat black', fontsize=11)
+    ax1.set_title('Environment', fontsize=12)
     ax1.set_ylabel('y (m)')
 
     _draw_arena(ax2, segs, start_xy, faint=True)
@@ -651,12 +647,7 @@ def plot(segs, start_xy, paths, path_png):
                        f'{(len(path) - 1) * ACTION_LENGTH:.1f} m')
         ax2.plot(px, py, 'o', ms=2.6, color=route[i % len(route)], zorder=10)
     ax2.legend(loc='lower left', fontsize=8.5, framealpha=0.9)
-    ax2.set_title('B   shortest route A* finds with the agent\'s own actions\n'
-                  f'{N_ACTIONS} moves of {ACTION_LENGTH} m on world bearings '
-                  f'45k, refused unless the 45 deg sector\n'
-                  f'is clear to {MASK_RANGE} m and the whole move keeps '
-                  f'{ROBOT_BUFFER} m around the robot',
-                  fontsize=11)
+    ax2.set_title('Shortest path estimated by A*', fontsize=12)
 
     fig.tight_layout()
     fig.savefig(path_png, dpi=150)
