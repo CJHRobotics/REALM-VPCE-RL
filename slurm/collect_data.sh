@@ -109,6 +109,21 @@ if [[ "${1:-}" == "--submit" ]]; then
 fi
 
 MAZES="${1:-}"
+shift || true
+# Anything further goes straight to Webots, the same as render_check.sh and
+# train_rl.sh already do. That is how a flag gets tested on the real job
+# rather than argued about:
+#
+#   sbatch slurm/collect_data.sh circ_lm10_r10_o20 --no-rendering
+#
+# --no-rendering skips Webots' own 3D view, which is a separate render from
+# the camera's and 26x its pixel count at the default Xvfb screen. It does
+# NOT skip the camera, and must not: eight camera frames per position are
+# the dataset. Confirm that on the arena with render_check.sh before
+# trusting it for a collection -- a flag that returns blank frames writes a
+# dataset of exactly the right shape whose features are identical
+# everywhere, and nothing downstream notices.
+WEBOTS_EXTRA=("$@")
 
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO_DIR"
@@ -155,6 +170,10 @@ echo "Image   : $SIF"
 echo "Python  : $PYTHON_BIN"
 echo "Binds   : ${BINDS[*]+${BINDS[*]}}${BINDS[0]:-(none needed - auto-mounted)}"
 T_START=$(date +%s)
+# Recorded because it is provenance, not configuration: a dataset collected
+# under a rendering flag is not interchangeable with one collected without
+# it, and the job log is the only place that would say so.
+echo "Webots  : extra flags [${WEBOTS_EXTRA[*]:-none}]"
 echo "Started : $(date -Is)"
 echo "Git     : $(git rev-parse --short HEAD 2>/dev/null || echo 'no git')"
 echo "===================================================================="
@@ -187,7 +206,9 @@ set +e
 timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
 "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-}" --env REALM_MAZES="${REALM_MAZES:-}" --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \
-    xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" webots --batch --stdout --stderr --mode=fast --minimize --port="$WEBOTS_PORT" "$WORLD"
+    xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" \
+    webots --batch --stdout --stderr --mode=fast --minimize --port="$WEBOTS_PORT" \
+        "${WEBOTS_EXTRA[@]+"${WEBOTS_EXTRA[@]}"}" "$WORLD"
 STATUS=$?
 set -e
 [[ ${STATUS} -eq 124 ]] && echo "TIMED OUT after ${WEBOTS_TIMEOUT}s -- Webots does not quit on a controller crash; check for a traceback above."
