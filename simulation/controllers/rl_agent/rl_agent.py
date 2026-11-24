@@ -45,28 +45,33 @@ import time
 # every other import: stable_baselines3 pulls torch in, and once torch has
 # seen a device the setting no longer has any effect.
 #
-# Two reasons, and the second is the one that forced this.
+# The card works now. This is a choice, not a workaround -- which is new,
+# and the history is worth keeping because two earlier versions of this
+# comment gave reasons that turned out to be false.
 #
-# This torch has no kernels for the cards that can render. Measured on
-# 2026-11-24 by slurm/gpu_check.sh: torch 2.14.1+cu126 ships sm_50, sm_60,
-# sm_70, sm_75, sm_80, sm_86, sm_90 and no PTX, while the render nodes are
-# 1080 Tis at sm_61. Wheel compatibility is forward-only, so there is
-# nothing to run and nothing to JIT from. The card reports it as
-# cudaErrorDevicesUnavailable, which reads like something else holding the
-# GPU -- it is not: cuCtxCreate succeeds on the same card from ctypes while
-# the card sits idle at 0 MiB. An earlier version of this comment blamed
-# exclusive-process compute mode; that was a guess, and the mode is Default.
+# It said the card was in exclusive-process compute mode and therefore could
+# not give the controller a context. That was a guess; the mode is Default.
+# It then said this torch had no kernels for sm_61. That was measured and
+# still wrong: 2.5.1+cu121 and 2.14.1+cu126 list exactly the same
+# architectures, neither lists sm_61, and on the same card only the first
+# allocates. The difference was the CUDA build against a 12.1 driver, and
+# setup/requirements.txt pins the one that works. gpu_check.sh confirmed it
+# on a 1080 Ti: allocation OK.
 #
-# A visible-but-unusable device is NOT neutral. Selecting device='cpu' is
-# not enough: torch 2.14's optimizer calls torch.accelerator.current_stream()
-# unconditionally in its graph-capture health check, and torch.accelerator
-# resolves from AVAILABILITY rather than from where the tensors live. So a
-# run that had correctly fallen back to CPU still died 2048 steps in, inside
-# optimizer.step(). Hiding the device removes the whole class of problem.
+# What remains is the real reason, and it was always the better one. The
+# network is 0.15 ms of a 118 ms environment step, so the GPU buys nothing
+# here, while Webots is using that card to render -- which is the entire
+# cost of the step and the only thing worth giving it to.
 #
-# This costs essentially nothing: measured on this task the network is
-# 0.15 ms of a 118 ms environment step. Set REALM_DEVICE=cuda to opt back
-# in, which is only sensible where Webots is not holding the card.
+# One historical hazard, now retired with the pin: torch 2.14's optimizer
+# called torch.accelerator.current_stream() in its graph-capture health
+# check, resolving from AVAILABILITY rather than from where the tensors
+# lived, so a run that had correctly chosen CPU still died 2048 steps in
+# inside optimizer.step(). Hiding the device made that impossible. On 2.5.1
+# it does not arise; if this is ever unpinned, it is waiting again.
+#
+# REALM_DEVICE=cuda opts back in, which is sensible where Webots is not
+# holding the card.
 if os.environ.get('REALM_DEVICE', 'cpu').lower() == 'cpu':
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
