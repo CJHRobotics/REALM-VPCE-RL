@@ -200,11 +200,30 @@ T_MARK="$(mktemp "${TMPDIR:-/tmp}/trainrl.XXXXXX")"
 trap 'rm -f "$T_MARK"' EXIT
 T_START=$(date +%s)
 
-# No `timeout` wrapper here, unlike render_check. That job had a known short
-# runtime and a hang was unambiguous; this one is supposed to run for hours,
-# and the SLURM walltime is the right backstop. The controller calls
-# simulationQuit when it finishes.
+# There IS a `timeout` wrapper here now. The previous reasoning -- this job
+# runs for hours, so the SLURM walltime is the right backstop -- was right
+# about the job and wrong about the card.
+#
+# Webots does not exit when its controller dies. A crashed controller leaves
+# the simulator running, and under hardware GL it keeps the CUDA context the
+# driver gave it for rendering. These cards are in exclusive-process compute
+# mode, so until it lets go nobody else can have one -- and with a 24-hour
+# walltime, a crash at minute two means 24 hours of a card held by a job that
+# already failed and will produce nothing. Job 635169, a place-field fit on
+# another node, is what that looks like from the outside:
+# cudaErrorDevicesUnavailable, two minutes into loading a 2.6 GB dataset,
+# nothing in its log pointing anywhere useful.
+#
+# The controllers now quit Webots themselves on a crash (see
+# realm_tools/simulation_lib/webots_exit.py), which handles every failure a
+# Python process can see. This is the outer backstop for the ones it cannot:
+# a SIGKILL, a hung Webots, a controller that never starts. Reaching it
+# always means something went wrong, because a finished run calls
+# simulationQuit.
+WEBOTS_TIMEOUT="${WEBOTS_TIMEOUT:-84000}"
+
 set +e
+timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
 "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
     --env REALM_MAZE="$ARENA" \
     --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-}" \
@@ -233,6 +252,7 @@ set -e
 ELAPSED=$(( $(date +%s) - T_START ))
 echo
 echo "Finished : $(date -Is)  (exit ${STATUS}, ${ELAPSED}s)"
+[[ ${STATUS} -eq 124 ]] && echo "TIMED OUT after ${WEBOTS_TIMEOUT}s -- Webots does not quit on a controller crash; check for a traceback above."
 
 echo "--- produced ---"
 ls -lh "$OUT_DIR/" 2>/dev/null || echo "(nothing in $OUT_DIR)"

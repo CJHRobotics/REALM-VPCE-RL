@@ -37,6 +37,7 @@ import numpy as np
 from realm_tools.robot_lib.my_robot import MyRobot
 from realm_tools.simulation_lib.arena_paths import (arena_positions,
                                                      arena_xml)
+from realm_tools.simulation_lib.webots_exit import quit_on_crash
 from realm_tools.experiment_lib.reporting import send_email
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r0')
@@ -59,6 +60,9 @@ def bench(label, fn, n=N):
 
 try:
     robot = MyRobot()
+    # A crash from here on quits Webots rather than leaving it holding
+    # this node's GPU for the rest of the walltime.
+    quit_webots = quit_on_crash(robot)
     robot.load_environment(
         arena_xml(MAZE), floor_texture='carpet')
     ts, sup = robot.timestep, robot.experiment_supervisor
@@ -139,6 +143,6 @@ finally:
     # partway and mailed nothing, leaving only the job log.
     send_email(f'[REALM-VPCE] perf probe — {MAZE}', body)
     try:
-        robot.experiment_supervisor.simulationQuit(0)
+        quit_webots(0)
     except Exception:
         pass

@@ -52,6 +52,8 @@ feature distance matrix is computed once per channel configuration and
 reused across every lambda, since Rule 4 only adds a positional term.
 """
 
+import os
+import subprocess
 import time
 
 import numpy as np
@@ -336,6 +338,36 @@ def resolve_cfg(cfg=None):
     return C
 
 
+def gpu_holders():
+    """What nvidia-smi says is on the cards, as lines for the log.
+
+    When a card refuses a context the useful question is who has it, and the
+    answer is one subprocess away. Without it the log says "unavailable" and
+    the next person starts by doubting torch -- which is exactly the wrong
+    place to look, and costs an afternoon.
+    """
+    out = []
+    for title, args in (
+            ('cards', ['--query-gpu=index,name,compute_mode,memory.used',
+                       '--format=csv,noheader']),
+            ('compute processes', ['--query-compute-apps=pid,process_name,'
+                                   'used_memory', '--format=csv,noheader'])):
+        try:
+            r = subprocess.run(['nvidia-smi'] + args, capture_output=True,
+                               text=True, timeout=30)
+            body = r.stdout.strip() or '(none reported)'
+        except Exception as exc:                            # noqa: BLE001
+            body = f'(nvidia-smi unavailable: {exc.__class__.__name__})'
+        out.append(f'{title}:')
+        out += [f'  {ln}' for ln in body.splitlines()]
+    out.append('a process here that is not this job is what holds the card; '
+               'these GPUs are in')
+    out.append('exclusive-process mode, so a second context on one is '
+               'refused. Webots counts:')
+    out.append('it holds a context for rendering for as long as it runs.')
+    return out
+
+
 def pick_device(use_gpu=True, verbose=True):
     if _HAS_TORCH and use_gpu and torch.cuda.is_available():
         # TF32 needs Ampere (sm_80+). On the cluster's 1080Ti (sm_61) and
@@ -345,34 +377,55 @@ def pick_device(use_gpu=True, verbose=True):
         cap = torch.cuda.get_device_capability(0)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        # PROVE the device before returning it. Everything above answers
-        # from the driver without creating a CUDA context: is_available()
-        # counts devices, and the capability, name and memory queries read
-        # properties. All of them succeed on a card that is in
-        # exclusive-process compute mode and already held by someone else.
-        # The first real ALLOCATION is what fails there, and on this job
-        # that is 7 GB of features, reached after a minute of loading and
-        # scaling the dataset -- so the run dies long after it could have
-        # chosen differently, with a CUDA error that reads like a bug.
+        # PROVE the device before returning it, and WAIT for it if it is
+        # busy. Everything above answers from the driver without creating a
+        # CUDA context: is_available() counts devices, and the capability,
+        # name and memory queries read properties. All of them succeed on a
+        # card that is in exclusive-process compute mode and already held by
+        # someone else. The first real ALLOCATION is what fails there, and
+        # on the fit that is seven gigabytes, reached a minute after this
+        # decision was made -- so the run died long after it could have
+        # chosen differently, with a CUDA error that read like a bug in
+        # torch. It was not: the card was taken.
         #
-        # One float costs nothing and moves that decision to here. Same
-        # lesson as a3981b3 on the RL side: a visible device is not a
-        # usable one.
-        try:
-            torch.zeros(1, device='cuda')
-        except Exception as exc:                            # noqa: BLE001
+        # One float costs nothing and moves the decision to here. The wait
+        # is for the common case on a shared node, which is a card held by
+        # something that is about to finish; a card held by a 24-hour job
+        # will not come free and the log says who has it instead.
+        wait = float(os.environ.get('REALM_GPU_WAIT', 60))
+        deadline = time.time() + wait
+        held = None
+        while True:
+            try:
+                torch.zeros(1, device='cuda')
+                break
+            except Exception as exc:                        # noqa: BLE001
+                held = exc
+                if time.time() >= deadline:
+                    break
+                if verbose:
+                    print(f'  device: cuda is busy, retrying for '
+                          f'{deadline - time.time():.0f} more seconds '
+                          f'(REALM_GPU_WAIT={wait:g})', flush=True)
+                time.sleep(min(10.0, max(1.0, deadline - time.time())))
+
+        if held is not None:
+            msg = (f'cuda is present but unusable after {wait:g}s: '
+                   f'{held.__class__.__name__}: '
+                   f'{str(held).splitlines()[0]}')
             if verbose:
-                print(f'  device: cuda is present but unusable '
-                      f'({exc.__class__.__name__}: '
-                      f'{str(exc).splitlines()[0]})')
-                print('    Usually another process holds the card: these '
-                      'GPUs are in exclusive-process')
-                print('    compute mode, so a second CUDA context on the '
-                      'same card is refused. Resubmitting')
-                print('    may land on a free one; --gres=gpu:A40:1 asks '
-                      'for a compute card instead.')
-                print('  device: cpu (falling back)')
+                print(f'  device: {msg}')
+                for line in gpu_holders():
+                    print(f'    {line}')
+            if os.environ.get('REALM_REQUIRE_GPU', '0') == '1':
+                raise RuntimeError(
+                    msg + '  (REALM_REQUIRE_GPU=1, so this is fatal rather '
+                          'than a fall back to CPU)')
+            if verbose:
+                print('  device: cpu (falling back; set REALM_REQUIRE_GPU=1 '
+                      'to fail here instead)')
             return torch.device('cpu')
+
         dev = torch.device('cuda')
         if verbose:
             name = torch.cuda.get_device_name(0)

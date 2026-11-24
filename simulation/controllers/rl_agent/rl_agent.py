@@ -81,6 +81,7 @@ import numpy as np
 from realm_tools.robot_lib.my_robot import MyRobot
 from realm_tools.rl_lib import VpceObserver, WebotsEnv, RewardConfig
 from realm_tools.simulation_lib.arena_paths import arena_xml
+from realm_tools.simulation_lib.webots_exit import quit_on_crash
 from realm_tools.rl_lib.agents import make_agent, algo_kwargs
 from realm_tools.rl_lib.callbacks import ConvergenceStopper
 
@@ -144,6 +145,9 @@ if os.path.exists(dataset):
     print('ensemble matches the arena dataset', flush=True)
 
 robot = MyRobot()
+# Before anything that can fail: a crash from here on quits Webots
+# rather than leaving it holding this node's GPU for the walltime.
+quit_webots = quit_on_crash(robot)
 robot.load_environment(ARENA_XML, floor_texture='carpet')
 
 env = WebotsEnv(
@@ -399,4 +403,4 @@ else:
 print(f'done in {time.time() - t0:.0f}s  ->  {OUT_DIR}', flush=True)
 
 # Quit, not reset: reset restarts the controller and this would run forever.
-robot.experiment_supervisor.simulationQuit(0)
+quit_webots(0)

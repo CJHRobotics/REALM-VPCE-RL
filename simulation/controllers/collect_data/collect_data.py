@@ -23,6 +23,7 @@ from functools import partial
 
 from realm_tools.robot_lib.my_robot import MyRobot
 from realm_tools.simulation_lib.arena_paths import arena_positions, arena_xml
+from realm_tools.simulation_lib.webots_exit import quit_on_crash
 from realm_tools.experiment_lib.loggers.visual_data_set import PovDataset
 from realm_tools.image_lib.image_feature_lib import extract_feature_dict
 
@@ -95,6 +96,9 @@ _extractor = partial(extract_feature_dict,
                      use_spatial=USE_SPATIAL)
 
 robot = MyRobot()
+# A crash from here on quits Webots rather than leaving it holding
+# this node's GPU for the rest of the walltime.
+quit_webots = quit_on_crash(robot)
 
 
 PROGRESS_EVERY_S = 30.0
@@ -247,4 +251,4 @@ for maze_index, maze in enumerate(maze_files):
 # unattended means this script runs again, skips every already-collected
 # maze, and resets once more -- forever. Quitting also lets a batch job
 # finish instead of sitting until its walltime expires.
-robot.experiment_supervisor.simulationQuit(0)
+quit_webots(0)

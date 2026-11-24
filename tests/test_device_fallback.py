@@ -33,13 +33,24 @@ BUSY = ('CUDA error: CUDA-capable device(s) is/are busy or unavailable\n'
 
 
 class FakeCard:
-    """A card that answers every query and refuses every allocation."""
+    """A card that answers every query and refuses every allocation.
 
-    def __init__(self, allocatable):
+    Sets REALM_GPU_WAIT=0 unless a test asks otherwise: pick_device waits a
+    minute for a busy card by default, which is right on a shared node and
+    absurd in a test.
+    """
+
+    def __init__(self, allocatable, wait='0'):
         self.allocatable = allocatable
+        self.wait = wait
         self.saved = {}
+        self.env = {}
 
     def __enter__(self):
+        for k, v in (('REALM_GPU_WAIT', self.wait),
+                     ('REALM_REQUIRE_GPU', os.environ.get('REALM_REQUIRE_GPU', '0'))):
+            self.env[k] = os.environ.get(k)
+            os.environ[k] = v
         self.saved = {
             'is_available': torch.cuda.is_available,
             'get_device_capability': torch.cuda.get_device_capability,
@@ -72,6 +83,11 @@ class FakeCard:
         return self
 
     def __exit__(self, *exc):
+        for k, v in self.env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         torch.cuda.is_available = self.saved['is_available']
         torch.cuda.get_device_capability = self.saved['get_device_capability']
         torch.cuda.get_device_name = self.saved['get_device_name']
@@ -93,6 +109,29 @@ def test_a_free_card_is_still_used():
         dev = R.pick_device(use_gpu=True, verbose=False)
     assert str(dev).startswith('cuda'), f'a working card returned {dev}'
     return 'a card that allocates is still used'
+
+
+def test_require_gpu_fails_instead_of_falling_back():
+    """When the point of the job is the GPU, a silent CPU run is worse."""
+    with FakeCard(allocatable=False):
+        os.environ['REALM_REQUIRE_GPU'] = '1'
+        try:
+            dev = R.pick_device(use_gpu=True, verbose=False)
+        except RuntimeError as exc:
+            assert 'REALM_REQUIRE_GPU' in str(exc), str(exc)
+            return 'REALM_REQUIRE_GPU=1 raises rather than returning cpu'
+        raise AssertionError(f'returned {dev} instead of raising')
+
+
+def test_a_busy_card_is_waited_for():
+    """The wait exists for a card about to be released, not for a test."""
+    import time
+    with FakeCard(allocatable=False, wait='3'):
+        t0 = time.time()
+        R.pick_device(use_gpu=True, verbose=False)
+        waited = time.time() - t0
+    assert waited >= 2.5, f'gave up after {waited:.1f}s, expected ~3'
+    return f'a busy card is retried for REALM_GPU_WAIT ({waited:.1f}s)'
 
 
 def test_no_gpu_is_honoured():

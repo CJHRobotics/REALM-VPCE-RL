@@ -44,6 +44,7 @@ from PIL import Image
 from realm_tools.robot_lib.my_robot import MyRobot
 from realm_tools.simulation_lib.arena_paths import (arena_positions,
                                                      arena_xml)
+from realm_tools.simulation_lib.webots_exit import quit_on_crash
 from realm_tools.experiment_lib.reporting import send_email
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r3')
@@ -66,6 +67,9 @@ POSES = [(0.0, 0.0, 0.0, 'centre_facing_0'),
 os.makedirs(OUT_DIR, exist_ok=True)
 
 robot = MyRobot()
+# A crash from here on quits Webots rather than leaving it holding
+# this node's GPU for the rest of the walltime.
+quit_webots = quit_on_crash(robot)
 robot.load_environment(MAZE_FILE, floor_texture='carpet')
 print(f'loaded {MAZE_FILE}', flush=True)
 
@@ -203,4 +207,4 @@ if wanted and not sent:
           flush=True)
 
 # Quit, not reset: reset restarts the controller and this would run forever.
-robot.experiment_supervisor.simulationQuit(0 if sent or not wanted else 1)
+quit_webots(0 if sent or not wanted else 1)
