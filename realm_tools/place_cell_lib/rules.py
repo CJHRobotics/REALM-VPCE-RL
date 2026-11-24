@@ -382,13 +382,18 @@ def pick_device(use_gpu=True, verbose=True):
         # Does this wheel have kernels for THIS card? Worth knowing, but
         # NOT decisive, and the difference matters.
         #
-        # GPU3 is a 1080 Ti at sm_61; torch 2.14.1+cu126 lists sm_50, sm_60,
-        # sm_70, sm_75, sm_80, sm_86, sm_90. A missing arch is the obvious
-        # reading -- except CUDA binary compatibility runs upward within a
-        # major generation, so sm_60 cubins are loadable on a 6.1 device,
-        # and 1080 Tis are reported in the wild running cu126 wheels whose
-        # arch list omits sm_61. So the list alone does not prove the card
-        # unusable; only trying does.
+        # SETTLED, 2026-11-24, and the answer is no. Both environments on
+        # this cluster list sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_90
+        # and neither lists sm_61, and on the same 1080 Ti, same node, same
+        # driver, torch 2.5.1+cu121 allocates and 2.14.1+cu126 does not. A
+        # missing arch was the obvious reading for most of a day and it was
+        # wrong: CUDA binary compatibility runs upward within a generation,
+        # so sm_60 cubins load on a 6.1 device. What differed was the CUDA
+        # BUILD against the driver -- see setup/requirements.txt.
+        #
+        # The warning stays because the list is still worth seeing in a log,
+        # and because on some other cluster it will be the answer. It is not
+        # a verdict here; only trying is.
         #
         # What it does buy is an explanation ready for when the allocation
         # fails, and a reason not to spend a minute retrying: if the arch is

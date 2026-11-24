@@ -11,23 +11,33 @@ pygame
 shapely
 astar
 tqdm
-# Pin torch, and pin it to a build that has kernels for the cards this
-# cluster actually has. Unpinned, this file installed 2.14.1+cu126 into
-# realm-vpce-rl, whose arch list is sm_50, sm_60, sm_70, sm_75, sm_80,
-# sm_86, sm_90 -- and the nodes that are always free are 1080 Tis at
-# sm_61. Every CUDA failure in this repo traces back to that line.
+# Pin torch, and pin the CUDA BUILD, which is the part that bit us.
 #
-# The place-field repo this was forked from has the same unpinned `torch`
-# and a working environment, because it was installed earlier and got an
-# earlier wheel. That is not a difference anyone chose, and leaving it
-# unpinned means the next person to rebuild the environment gets whatever
-# is current that day. Pin it to what is measured to work here.
+# Measured on GAIVI, 2026-11-24, same node, same card, same driver
+# (530.30.02, a CUDA 12.1 driver), same arch list in both wheels:
 #
-# FILL THIS IN from the environment that works:
-#   conda activate realm-vpce
-#   python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list())"
-# then put that version below and reinstall realm-vpce-rl against it.
-torch
+#   realm-vpce     torch 2.5.1+cu121   ->  allocates on a GTX 1080 Ti
+#   realm-vpce-rl  torch 2.14.1+cu126  ->  cudaErrorDevicesUnavailable
+#
+# Both wheels list sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_90 and
+# neither lists sm_61, so the missing arch -- which looked like the answer
+# for most of a day -- is not it. The cu126 runtime cannot work with a 12.1
+# driver on this hardware; the cu121 one can. Minor-version compatibility is
+# supposed to make that fine and here it does not, which is exactly why this
+# is pinned to a measurement rather than to a rule.
+#
+# Both repos said plain `torch`. The only reason one environment worked is
+# that it was built on an earlier day and got an earlier wheel -- a
+# difference nobody chose and nobody could see. So:
+#
+#   pip install --force-reinstall torch==2.5.1 \
+#       --index-url https://download.pytorch.org/whl/cu121
+#
+# The index URL is not optional: plain `pip install torch==2.5.1` from PyPI
+# gives whichever CUDA build is default there, which is how this started.
+# If the cluster's driver is ever upgraded, re-measure before moving: the
+# test is slurm/gpu_check.sh, and it takes a minute.
+torch==2.5.1          # +cu121, see above
 gymnasium
 stable-baselines3
 jupyterlab

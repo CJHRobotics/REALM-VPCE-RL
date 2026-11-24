@@ -137,7 +137,13 @@ try:
     cap = torch.cuda.get_device_capability(0)
     print(f'  capability: sm_{cap[0]}{cap[1]}'
           + ('' if f'sm_{cap[0]}{cap[1]}' in torch.cuda.get_arch_list()
-             else '   <-- NOT IN THE WHEEL: this card needs a build that has it'))
+             else '   <-- not listed, which is NOT by itself the problem:'
+                  ' cubins load upward'))
+    if f'sm_{cap[0]}{cap[1]}' not in torch.cuda.get_arch_list():
+        print('      (2.5.1+cu121 and 2.14.1+cu126 have the SAME list and '
+              'only one works here;')
+        print('       compare torch.version.cuda against the driver before '
+              'blaming the arch)')
 except Exception as exc:
     print(f'  capability query failed: {exc.__class__.__name__}: {exc}')
 try:
