@@ -82,6 +82,7 @@ if REPO not in sys.path:
 from realm_tools.place_cell_lib import channels as ch
 from realm_tools.place_cell_lib import rules as R
 from realm_tools.place_cell_lib.place_cells import VisualPlaceCellEnsemble
+from realm_tools.simulation_lib.arena_paths import arena_xml
 
 # Matches the collection job's lidar handling, so features assembled here are
 # the same ones the paper's analysis saw.
@@ -199,11 +200,9 @@ def main():
     keys = ch.CHANNEL_SETS[args.channels]
 
     data_path = f'{REPO}/data/vpce/collect_data/{args.arena}.h5'
-    # REALM_ARENA_DIR picks the environments directory, so an obstacle
-    # arena under vpce-rl fits with the same command as a vpce one.
-    arena_dir = os.environ.get('REALM_ARENA_DIR', 'vpce').strip('/')
-    xml_path = (f'{REPO}/simulation/worlds/environments/'
-                f'{arena_dir}/{args.arena}.xml')
+    # The arena's name says which environments directory holds it, so an
+    # obstacle arena under vpce-rl fits with the same command as a vpce one.
+    xml_path = arena_xml(args.arena, REPO)
     out_path = args.out or (f'{REPO}/data/vpce/place_fields/'
                             f'{args.arena}_{args.channels}.h5')
 

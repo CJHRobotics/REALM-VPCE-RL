@@ -22,18 +22,14 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 from realm_tools.robot_lib.my_robot import MyRobot
+from realm_tools.simulation_lib.arena_paths import arena_positions, arena_xml
 from realm_tools.experiment_lib.loggers.visual_data_set import PovDataset
 from realm_tools.image_lib.image_feature_lib import extract_feature_dict
 
 
-# Which environments directory to collect from. `vpce` is the place-field
-# paper's nine-arena sweep, empty enclosures whose datasets that paper rests
-# on; `vpce-rl` holds the obstacle arenas the RL work uses. They are kept
-# apart so a dataset from one is never mistaken for a dataset from the other,
-# and the choice is an environment variable so one SLURM job can collect from
-# either without an edit.
-ARENA_DIR = os.environ.get('REALM_ARENA_DIR', 'vpce').strip('/')
-maze_file_dir = f'simulation/worlds/environments/{ARENA_DIR}/'
+# Arenas live in more than one directory -- `vpce` for the place-field
+# paper's empty enclosures, `vpce-rl` for the obstacle arenas -- and the name
+# says which, so nothing here has to be told. See arena_paths.
 
 # The arenas this experiment uses. Three discs spanning 11.1x in area
 # against Harland's 8.8x, at fixed shape and fixed landmark count, a 10 x 2 m
@@ -205,12 +201,13 @@ for maze_index, maze in enumerate(maze_files):
     # Load (or reload) the environment for this maze
     if env_loaded:
         robot.reset_environment()
-    robot.load_environment(maze_file_dir + maze + '.xml', floor_texture='carpet')
+    robot.load_environment(arena_xml(maze), floor_texture='carpet')
     env_loaded = True
 
-    positions_path = maze_file_dir + 'positions/' + maze + '_positions.csv'
+    positions_path = arena_positions(maze)
     if not os.path.exists(positions_path):
-        positions_path = maze_file_dir + 'positions/' + POSITIONS_FILE_FALLBACK
+        positions_path = os.path.join(os.path.dirname(positions_path),
+                                      POSITIONS_FILE_FALLBACK)
     positions = pd.read_csv(positions_path)
     print(f"Positions: {positions_path}   ({len(positions)} points)")
 

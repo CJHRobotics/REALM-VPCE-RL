@@ -12,7 +12,8 @@ Configured by environment variables, so a SLURM job can sweep conditions
 without editing anything. They are read once, at the top, and echoed:
 
     REALM_MAZE        arena to load                  (circ_lm8_r10)
-    REALM_ARENA_DIR   environments/<dir> it lives in (vpce)
+    REALM_ARENA_DIR   force the environments/<dir> to look in,
+                      instead of finding the arena by name
     REALM_ENSEMBLE    place-field .h5 to observe through
                       (data/vpce/place_fields/<maze>_visual.h5)
     REALM_TIMESTEPS   training steps                 (100000)
@@ -79,14 +80,14 @@ import numpy as np
 
 from realm_tools.robot_lib.my_robot import MyRobot
 from realm_tools.rl_lib import VpceObserver, WebotsEnv, RewardConfig
+from realm_tools.simulation_lib.arena_paths import arena_xml
 from realm_tools.rl_lib.agents import make_agent, algo_kwargs
 from realm_tools.rl_lib.callbacks import ConvergenceStopper
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r10')
-# Which environments directory the arena lives in. `vpce` is the place-field
-# paper's sweep of empty enclosures; `vpce-rl` holds the obstacle arenas.
-ARENA_DIR = os.environ.get('REALM_ARENA_DIR', 'vpce').strip('/')
-ARENA_XML = f'simulation/worlds/environments/{ARENA_DIR}/{MAZE}.xml'
+# The arena's name says which environments directory it is in, so nothing
+# has to be told which one. See realm_tools/simulation_lib/arena_paths.py.
+ARENA_XML = arena_xml(MAZE)
 ENSEMBLE = os.environ.get(
     'REALM_ENSEMBLE', f'data/vpce/place_fields/{MAZE}_visual.h5')
 TIMESTEPS = int(os.environ.get('REALM_TIMESTEPS', 100_000))

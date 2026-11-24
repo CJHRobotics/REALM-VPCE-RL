@@ -207,7 +207,7 @@ T_START=$(date +%s)
 set +e
 "$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
     --env REALM_MAZE="$ARENA" \
-    --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-vpce}" \
+    --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-}" \
     --env REALM_ENSEMBLE="$ENSEMBLE" \
     --env REALM_RUN_TAG="$TAG" \
     --env REALM_TIMESTEPS="${REALM_TIMESTEPS:-100000}" \
