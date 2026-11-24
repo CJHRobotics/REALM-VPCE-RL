@@ -425,6 +425,16 @@ ACTION_BEARING = np.arange(N_ACTIONS) * (2 * np.pi / N_ACTIONS)
 # ahead of it is clear to action_length + 0.25.
 MASK_RANGE     = ACTION_LENGTH + 0.25
 KEY_RES        = 0.05       # two positions this close are one search node
+# The robot is a body, not a point, and the action mask does not know that.
+# It models the lidar, which refuses a direction on what lies AHEAD in a
+# 45-degree sector; it says nothing about the wall the robot is sliding past
+# on its flank. The hambot's bounding box is 0.2 x 0.171 x 0.15 m, so its
+# circumscribed radius is 0.132 m -- a 0.2 m buffer between the centre and
+# any surface leaves about 0.07 m of real air. Every move is checked along
+# its whole swept path, not just at its endpoints, because a 0.5 m step can
+# pass a segment end that neither endpoint is close to.
+ROBOT_BUFFER   = 0.2
+SWEEP_STEP     = 0.025      # how finely a move is sampled for that check
 
 
 def blocked_field(segs):
@@ -478,7 +488,31 @@ def blocked_field(segs):
     return blocked, xs, ys
 
 
-def astar(start, blocked, goal=GOAL, cap=400_000):
+def move_clear(x, y, nx, ny, segs):
+    """Does the robot's centre keep ROBOT_BUFFER along the whole move?"""
+    n = max(2, int(np.ceil(ACTION_LENGTH / SWEEP_STEP)) + 1)
+    t = np.linspace(0.0, 1.0, n)
+    px = x + t * (nx - x)
+    py = y + t * (ny - y)
+    if np.hypot(px, py).max() > RADIUS - ROBOT_BUFFER:
+        return False
+    return bool(point_seg_dist(px, py, segs).min() >= ROBOT_BUFFER)
+
+
+def route_clearance(path, segs):
+    """Smallest distance from the robot's centre to anything, along a route."""
+    worst = np.inf
+    for a, b in zip(path, path[1:]):
+        n = max(2, int(np.ceil(ACTION_LENGTH / SWEEP_STEP)) + 1)
+        t = np.linspace(0.0, 1.0, n)
+        px = a[0] + t * (b[0] - a[0])
+        py = a[1] + t * (b[1] - a[1])
+        worst = min(worst, float(point_seg_dist(px, py, segs).min()),
+                    float(RADIUS - np.hypot(px, py).max()))
+    return worst
+
+
+def astar(start, blocked, segs, goal=GOAL, cap=400_000):
     """Fewest of the agent's own actions from start to the goal.
 
     Nodes are exact positions, reached by summing whole actions, so every
@@ -531,7 +565,9 @@ def astar(start, blocked, goal=GOAL, cap=400_000):
                 continue
             nx = x + ACTION_LENGTH * np.cos(ACTION_BEARING[a])
             ny = y + ACTION_LENGTH * np.sin(ACTION_BEARING[a])
-            if np.hypot(nx, ny) > RADIUS:
+            # The mask has already cleared the sector ahead; this is the
+            # robot's own width, which the mask does not account for.
+            if not move_clear(x, y, nx, ny, segs):
                 continue
             nk = key(nx, ny)
             ng = g + ACTION_LENGTH
@@ -617,8 +653,9 @@ def plot(segs, start_xy, paths, path_png):
     ax2.legend(loc='lower left', fontsize=8.5, framealpha=0.9)
     ax2.set_title('B   shortest route A* finds with the agent\'s own actions\n'
                   f'{N_ACTIONS} moves of {ACTION_LENGTH} m on world bearings '
-                  f'45k, each refused unless\n'
-                  f'its 45 deg sector is clear to {MASK_RANGE} m',
+                  f'45k, refused unless the 45 deg sector\n'
+                  f'is clear to {MASK_RANGE} m and the whole move keeps '
+                  f'{ROBOT_BUFFER} m around the robot',
                   fontsize=11)
 
     fig.tight_layout()
@@ -643,7 +680,7 @@ def main():
         # is not always one the agent will enter. A layout that survives the
         # fill but not the search is rejected like any other.
         blocked, _bxs, _bys = blocked_field(segs)
-        paths = [astar(p[:2], blocked) for p in start_xy]
+        paths = [astar(p[:2], blocked, segs) for p in start_xy]
         if all(p is not None for p in paths):
             break
         print(f'  attempt {attempt}: flood fill passed but A* found no route '
@@ -685,8 +722,11 @@ def main():
               f'{walked:9.1f}m {walked/d:7.2f}  '
               f'{"BLOCKED" if blocked_line else "clear"}')
     worst = max(len(p) - 1 for p in paths)
+    tight = min(route_clearance(p, segs) for p in paths)
     print(f'  longest route is {worst} actions against the '
           f'{int(os.environ.get("REALM_MAX_STEPS", 200))}-step episode cap')
+    print(f'  tightest squeeze on any route: {tight:.2f} m from the robot\'s '
+          f'centre to a surface (buffer {ROBOT_BUFFER})')
     print(f'  -> {xml_path}')
     print(f'  -> {csv_path}')
     print(f'  -> {png_path}')
