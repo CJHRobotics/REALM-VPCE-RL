@@ -47,7 +47,7 @@ DEF ENVIRONMENT_FLOOR Floor {
   tileSize 2 2
   appearance PBRAppearance {
     baseColorMap ImageTexture {
-      url "../protos/world_objects/textures/floor_textures/lightwood_darkwood.png"
+      url "../protos/world_objects/textures/floor_textures/carpet.png"
     }
     roughness 1
     metalness 0
