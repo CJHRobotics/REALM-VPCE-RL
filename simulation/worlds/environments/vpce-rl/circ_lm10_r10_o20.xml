@@ -55,64 +55,64 @@
          mask needs to enter it. They are textured rather than flat black,
          so the camera can tell furniture from the perimeter. -->
     <wall x1=" 2.2191" y1=" 6.3834" x2="-0.0926" y2=" 7.1569"
-          height="0.5" width="0.012"
-          texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1="-0.8839" y1=" 2.8044" x2="-0.6128" y2=" 5.4864"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1="-5.5656" y1="-2.8153" x2="-5.2424" y2="-0.9609"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 7.0945" y1="-1.3176" x2=" 4.7141" y2=" 0.4972"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 4.9077" y1="-3.5680" x2=" 4.8350" y2="-2.0162"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1="-1.4254" y1="-1.4926" x2="-3.1191" y2=" 0.2909"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 2.4619" y1=" 3.0310" x2=" 3.0112" y2=" 4.5219"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1="-3.4739" y1=" 2.7408" x2="-4.6898" y2=" 5.2919"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 0.2014" y1="-5.5719" x2="-0.1268" y2="-3.3949"
-          height="0.5" width="0.012"
-          texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1="-3.0221" y1="-6.5760" x2="-1.7014" y2="-4.0966"
-          height="0.5" width="0.012"
-          texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1="-7.0140" y1="-1.2984" x2="-7.6115" y2=" 0.1008"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1="-7.9920" y1=" 1.9094" x2="-6.6700" y2=" 3.4236"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 6.5195" y1=" 4.5740" x2=" 4.7640" y2=" 5.0515"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
+          texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
+    <wall x1="-3.3235" y1="-6.2624" x2="-3.1664" y2="-3.8618"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1="-2.5188" y1=" 5.9457" x2="-3.1653" y2=" 7.4845"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 3.8410" y1="-7.0261" x2=" 2.7634" y2="-5.7829"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1=" 7.2451" y1=" 1.4149" x2=" 4.5194" y2=" 2.3625"
-          height="0.5" width="0.012"
+    <wall x1="-1.4790" y1=" 2.9640" x2=" 0.0669" y2=" 3.6799"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
     <wall x1=" 2.6601" y1="-1.7592" x2=" 2.8578" y2=" 0.8018"
-          height="0.5" width="0.012"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1="-7.3970" y1="-4.7433" x2="-4.4881" y2="-4.4680"
-          height="0.5" width="0.012"
+    <wall x1=" 0.6529" y1="-8.1901" x2="-1.5707" y2="-7.2419"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1="-0.8937" y1="-8.5647" x2=" 0.3815" y2="-7.3046"
-          height="0.5" width="0.012"
+    <wall x1="-8.8047" y1="-0.2816" x2="-6.3673" y2=" 0.4000"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
-    <wall x1=" 6.1021" y1="-4.8710" x2=" 6.8094" y2="-3.4009"
-          height="0.5" width="0.012"
+    <wall x1=" 7.2010" y1=" 0.9149" x2=" 5.9902" y2=" 2.1663"
+          height="0.5" width="0.1"
+          texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
+    <wall x1="-5.2086" y1="-4.8729" x2="-6.7133" y2="-4.6899"
+          height="0.5" width="0.1"
+          texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
+    <wall x1=" 5.0185" y1="-5.7663" x2=" 6.5927" y2="-5.0541"
+          height="0.5" width="0.1"
           texture="../protos/world_objects/textures/wall_textures/caution_tape.jpg"/>
 
     <!-- Four starts at 22.5 + 90k degrees, alternating r = 8 and r = 5 so

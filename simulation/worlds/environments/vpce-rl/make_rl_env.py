@@ -75,7 +75,19 @@ N_TARGET    = 30147     # positions per arena, held constant
 # exactly as the perimeter does -- the lidar sits 0.185 m off the floor and
 # the camera at 0.188 m, both well under 0.5 m.
 OBS_H       = 0.5
-OBS_W       = 0.012
+# Thick enough to be a barrier rather than a sheet. At the PROTO's 0.012 m
+# default an obstacle is a razor blade: seen edge-on from across the arena it
+# covers a fifth of a pixel of a 224 px camera at 45 degrees, so the camera
+# that the whole representation is built on could not see it at all from half
+# the bearings. At 0.1 m it covers about 3 px at 10 m and is visible from
+# every side, which is the point of putting it there.
+OBS_W       = 0.1
+# Every distance below is measured to an obstacle's CENTRE LINE, because that
+# is what the XML stores and what point_seg_dist returns. Physical clearance
+# is to its SURFACE, so half the thickness is added wherever the two meet.
+# At 0.012 m that difference was 6 mm and ignoring it was harmless; at 0.1 m
+# it is 50 mm, which is a quarter of the robot's buffer.
+OBS_HALF    = OBS_W / 2
 # Obstacles are textured, the perimeter is flat black. They are different
 # kinds of thing -- one bounds the arena, the other furnishes it -- and the
 # agent sees through a camera, so telling them apart is something the
@@ -190,19 +202,19 @@ def sample_obstacles(rng, start_xy):
 
         # Inside the wall, with a passable gap left at each tip.
         if max(np.hypot(cand[0], cand[1]),
-               np.hypot(cand[2], cand[3])) > RADIUS - WALL_GAP:
+               np.hypot(cand[2], cand[3])) > RADIUS - WALL_GAP - OBS_HALF:
             continue
         # Clear of the goal, so it stays approachable from several bearings.
         if point_seg_dist(np.array([GOAL[0]]), np.array([GOAL[1]]),
-                          cand[None, :])[0, 0] < GOAL_KEEP:
+                          cand[None, :])[0, 0] < GOAL_KEEP + OBS_HALF:
             continue
         # Clear of every start, so no episode begins wedged against one.
         sx = np.array([s[0] for s in start_xy])
         sy = np.array([s[1] for s in start_xy])
-        if point_seg_dist(sx, sy, cand[None, :]).min() < START_KEEP:
+        if point_seg_dist(sx, sy, cand[None, :]).min() < START_KEEP + OBS_HALF:
             continue
         # Clear of each other, so no pair forms a gap too narrow to use.
-        if any(seg_seg_dist(cand, s) < GAP for s in segs):
+        if any(seg_seg_dist(cand, s) < GAP + OBS_W for s in segs):
             continue
         segs.append(cand)
     return np.array(segs)
@@ -220,7 +232,7 @@ def occupancy(segs):
     X, Y = np.meshgrid(xs, ys, indexing='ij')
     inside = np.hypot(X, Y) <= RADIUS - CLEAR
     d = point_seg_dist(X, Y, segs).min(axis=1).reshape(X.shape)
-    return inside & (d >= CLEAR), xs, ys
+    return inside & (d >= CLEAR + OBS_HALF), xs, ys
 
 
 def flood(free, seed_ij):
@@ -280,7 +292,7 @@ def straight_blocked(x, y, segs):
     t = np.linspace(0.0, 1.0, 400)
     px = x + t * (GOAL[0] - x)
     py = y + t * (GOAL[1] - y)
-    return bool(point_seg_dist(px, py, segs).min() < CLEAR)
+    return bool(point_seg_dist(px, py, segs).min() < CLEAR + OBS_HALF)
 
 
 def cell(xs, ys, x, y):
@@ -394,7 +406,8 @@ def write_positions(segs, path):
     probe = np.linspace(-usable, usable, 601)
     PX, PY = np.meshgrid(probe, probe, indexing='ij')
     ok = np.hypot(PX, PY) <= usable
-    ok &= point_seg_dist(PX, PY, segs).min(axis=1).reshape(PX.shape) >= OBS_MARGIN
+    ok &= (point_seg_dist(PX, PY, segs).min(axis=1).reshape(PX.shape)
+           >= OBS_MARGIN + OBS_HALF)
     cell_area = (probe[1] - probe[0]) ** 2
     free_area = float(ok.sum() * cell_area)
 
@@ -403,7 +416,8 @@ def write_positions(segs, path):
     ax = np.round(np.arange(-n, n + 1) * spacing, 5)
     X, Y = np.meshgrid(ax, ax, indexing='ij')
     keep = np.hypot(X, Y) <= usable + 1e-9
-    keep &= point_seg_dist(X, Y, segs).min(axis=1).reshape(X.shape) >= OBS_MARGIN
+    keep &= (point_seg_dist(X, Y, segs).min(axis=1).reshape(X.shape)
+             >= OBS_MARGIN + OBS_HALF)
     xs, ys = X[keep], Y[keep]
     with open(path, 'w') as f:
         f.write('x,y,theta\n')
@@ -453,38 +467,43 @@ def blocked_field(segs):
     ys = np.linspace(-RADIUS, RADIUS, n)
     blocked = np.zeros((N_ACTIONS, n, n), dtype=bool)
 
-    # Everything the lidar would return a range for: obstacles and perimeter.
-    pts = []
+    # Everything the lidar would return a range for. Obstacle samples sit on
+    # the centre line but the beam stops at the surface, so they reach half a
+    # thickness further than the perimeter's samples, which are already on
+    # its inner face.
+    obs = []
     for sg in segs:
         length = float(np.hypot(sg[2] - sg[0], sg[3] - sg[1]))
         t = np.linspace(0.0, 1.0, max(2, int(length / 0.02)))
-        pts.append(np.stack([sg[0] + t * (sg[2] - sg[0]),
+        obs.append(np.stack([sg[0] + t * (sg[2] - sg[0]),
                              sg[1] + t * (sg[3] - sg[1])], axis=1))
     wt = np.linspace(0.0, 2 * np.pi, int(2 * np.pi * RADIUS / 0.02),
                      endpoint=False)
-    pts.append(np.stack([RADIUS * np.cos(wt), RADIUS * np.sin(wt)], axis=1))
-    pts = np.concatenate(pts)
+    groups = [(np.concatenate(obs), MASK_RANGE + OBS_HALF),
+              (np.stack([RADIUS * np.cos(wt), RADIUS * np.sin(wt)], axis=1),
+               MASK_RANGE)]
 
-    half = int(np.ceil(MASK_RANGE / RES))
-    for px, py in pts:
-        ci = int(round((px + RADIUS) / RES))
-        cj = int(round((py + RADIUS) / RES))
-        i0, i1 = max(0, ci - half), min(n, ci + half + 1)
-        j0, j1 = max(0, cj - half), min(n, cj + half + 1)
-        if i0 >= i1 or j0 >= j1:
-            continue
-        dx = px - xs[i0:i1][:, None]
-        dy = py - ys[j0:j1][None, :]
-        within = (dx * dx + dy * dy) <= MASK_RANGE ** 2
-        if not within.any():
-            continue
-        # Which 45-degree bin the obstacle point falls in, seen from the cell.
-        k = np.rint(np.arctan2(dy, dx) / (2 * np.pi / N_ACTIONS))
-        k = (k.astype(int) % N_ACTIONS) * np.ones_like(within, dtype=int)
-        for a in range(N_ACTIONS):
-            sel = within & (k == a)
-            if sel.any():
-                blocked[a, i0:i1, j0:j1] |= sel
+    for pts, reach in groups:
+        half = int(np.ceil(reach / RES))
+        for px, py in pts:
+            ci = int(round((px + RADIUS) / RES))
+            cj = int(round((py + RADIUS) / RES))
+            i0, i1 = max(0, ci - half), min(n, ci + half + 1)
+            j0, j1 = max(0, cj - half), min(n, cj + half + 1)
+            if i0 >= i1 or j0 >= j1:
+                continue
+            dx = px - xs[i0:i1][:, None]
+            dy = py - ys[j0:j1][None, :]
+            within = (dx * dx + dy * dy) <= reach ** 2
+            if not within.any():
+                continue
+            # Which 45-degree bin it falls in, seen from the cell.
+            k = np.rint(np.arctan2(dy, dx) / (2 * np.pi / N_ACTIONS))
+            k = (k.astype(int) % N_ACTIONS) * np.ones_like(within, dtype=int)
+            for a in range(N_ACTIONS):
+                sel = within & (k == a)
+                if sel.any():
+                    blocked[a, i0:i1, j0:j1] |= sel
     return blocked, xs, ys
 
 
@@ -496,7 +515,8 @@ def move_clear(x, y, nx, ny, segs):
     py = y + t * (ny - y)
     if np.hypot(px, py).max() > RADIUS - ROBOT_BUFFER:
         return False
-    return bool(point_seg_dist(px, py, segs).min() >= ROBOT_BUFFER)
+    return bool(point_seg_dist(px, py, segs).min()
+                >= ROBOT_BUFFER + OBS_HALF)
 
 
 def route_clearance(path, segs):
@@ -507,7 +527,8 @@ def route_clearance(path, segs):
         t = np.linspace(0.0, 1.0, n)
         px = a[0] + t * (b[0] - a[0])
         py = a[1] + t * (b[1] - a[1])
-        worst = min(worst, float(point_seg_dist(px, py, segs).min()),
+        worst = min(worst,
+                    float(point_seg_dist(px, py, segs).min()) - OBS_HALF,
                     float(RADIUS - np.hypot(px, py).max()))
     return worst
 
