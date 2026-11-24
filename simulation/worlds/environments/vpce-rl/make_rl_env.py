@@ -76,7 +76,12 @@ N_TARGET    = 30147     # positions per arena, held constant
 # the camera at 0.188 m, both well under 0.5 m.
 OBS_H       = 0.5
 OBS_W       = 0.012
-OBS_RGB     = (0.0, 0.0, 0.0)
+# Obstacles are textured, the perimeter is flat black. They are different
+# kinds of thing -- one bounds the arena, the other furnishes it -- and the
+# agent sees through a camera, so telling them apart is something the
+# representation can actually learn from. The wall PROTO takes a texture URL
+# relative to the world file, as the landmark flags do.
+OBS_TEXTURE = '../protos/world_objects/textures/wall_textures/caution_tape.jpg'
 OBS_LEN     = (1.5, 3.0)    # segment length range, m
 OBS_MARGIN  = 0.3           # collection keep-out from an obstacle, m
 
@@ -335,13 +340,14 @@ def write_xml(segs, start_xy, path):
         f'         orientations, centres uniform over the disc. Every pair is at\n'
         f'         least {GAP} m apart and every tip at least {WALL_GAP} m from the wall,\n'
         f'         so no two of them form a gap narrower than the {CLEAR} m the action\n'
-        f'         mask needs to enter it. -->\n')
+        f'         mask needs to enter it. They are textured rather than flat black,\n'
+        f'         so the camera can tell furniture from the perimeter. -->\n')
     for s in segs:
         lines.append(
             f'    <wall x1="{fmt(s[0],4)}" y1="{fmt(s[1],4)}" '
             f'x2="{fmt(s[2],4)}" y2="{fmt(s[3],4)}"\n'
-            f'          height="{OBS_H}" width="{OBS_W}" '
-            f'red="{OBS_RGB[0]:.2f}" green="{OBS_RGB[1]:.2f}" blue="{OBS_RGB[2]:.2f}"/>\n')
+            f'          height="{OBS_H}" width="{OBS_W}"\n'
+            f'          texture="{OBS_TEXTURE}"/>\n')
 
     lines.append(
         '\n    <!-- Four starts at 22.5 + 90k degrees, alternating r = 8 and r = 5 so\n'
@@ -406,70 +412,217 @@ def write_positions(segs, path):
     return (xs, ys), spacing, free_area
 
 
-def plot(segs, start_xy, comp, xs, ys, grid_xy, path):
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+
+# --------------------------------------------------------------------- A*
+
+# The agent's action set, as MyRobot defines it: action k moves one action
+# length along WORLD bearing 45k. Allocentric, so the bearings do not depend
+# on which way the robot faces.
+ACTION_LENGTH  = 0.5
+N_ACTIONS      = 8
+ACTION_BEARING = np.arange(N_ACTIONS) * (2 * np.pi / N_ACTIONS)
+# get_possible_actions refuses an action unless the whole 45-degree sector
+# ahead of it is clear to action_length + 0.25.
+MASK_RANGE     = ACTION_LENGTH + 0.25
+KEY_RES        = 0.05       # two positions this close are one search node
+
+
+def blocked_field(segs):
+    """blocked[k, i, j]: action k refused by the lidar mask at that cell.
+
+    This reimplements get_possible_actions rather than testing clearance,
+    because the two differ in a way that changes the answer. The mask is a
+    SECTOR test: action k is refused when anything lies within 0.75 m inside
+    the 45-degree wedge centred on bearing 45k. So a robot 0.3 m from an
+    obstacle still moves freely in six directions, which a clearance test
+    would call blocked outright. Searching over clearance would find routes
+    the agent cannot take and miss routes it can.
+    """
+    n = int(np.ceil(2 * RADIUS / RES)) + 1
+    xs = np.linspace(-RADIUS, RADIUS, n)
+    ys = np.linspace(-RADIUS, RADIUS, n)
+    blocked = np.zeros((N_ACTIONS, n, n), dtype=bool)
+
+    # Everything the lidar would return a range for: obstacles and perimeter.
+    pts = []
+    for sg in segs:
+        length = float(np.hypot(sg[2] - sg[0], sg[3] - sg[1]))
+        t = np.linspace(0.0, 1.0, max(2, int(length / 0.02)))
+        pts.append(np.stack([sg[0] + t * (sg[2] - sg[0]),
+                             sg[1] + t * (sg[3] - sg[1])], axis=1))
+    wt = np.linspace(0.0, 2 * np.pi, int(2 * np.pi * RADIUS / 0.02),
+                     endpoint=False)
+    pts.append(np.stack([RADIUS * np.cos(wt), RADIUS * np.sin(wt)], axis=1))
+    pts = np.concatenate(pts)
+
+    half = int(np.ceil(MASK_RANGE / RES))
+    for px, py in pts:
+        ci = int(round((px + RADIUS) / RES))
+        cj = int(round((py + RADIUS) / RES))
+        i0, i1 = max(0, ci - half), min(n, ci + half + 1)
+        j0, j1 = max(0, cj - half), min(n, cj + half + 1)
+        if i0 >= i1 or j0 >= j1:
+            continue
+        dx = px - xs[i0:i1][:, None]
+        dy = py - ys[j0:j1][None, :]
+        within = (dx * dx + dy * dy) <= MASK_RANGE ** 2
+        if not within.any():
+            continue
+        # Which 45-degree bin the obstacle point falls in, seen from the cell.
+        k = np.rint(np.arctan2(dy, dx) / (2 * np.pi / N_ACTIONS))
+        k = (k.astype(int) % N_ACTIONS) * np.ones_like(within, dtype=int)
+        for a in range(N_ACTIONS):
+            sel = within & (k == a)
+            if sel.any():
+                blocked[a, i0:i1, j0:j1] |= sel
+    return blocked, xs, ys
+
+
+def astar(start, blocked, goal=GOAL, cap=400_000):
+    """Fewest of the agent's own actions from start to the goal.
+
+    Nodes are exact positions, reached by summing whole actions, so every
+    point on the returned path is one the agent could actually stand on.
+    Only the visited set is discretised, at KEY_RES: the 8 action bearings
+    generate a set that is dense in the plane, so without that the search
+    would never close. Two positions within 5 cm are treated as the same
+    state, which can cost a step of optimality and cannot produce a route
+    the agent could not walk.
+
+    Returns the list of positions, or None if the goal is unreachable.
+    """
+    import heapq
+    n = blocked.shape[1]
+
+    def ij(x, y):
+        return (min(max(int(round((x + RADIUS) / RES)), 0), n - 1),
+                min(max(int(round((y + RADIUS) / RES)), 0), n - 1))
+
+    def key(x, y):
+        return (int(round(x / KEY_RES)), int(round(y / KEY_RES)))
+
+    def h(x, y):
+        return max(0.0, float(np.hypot(x - goal[0], y - goal[1])) - GOAL_R)
+
+    sx, sy = float(start[0]), float(start[1])
+    k0 = key(sx, sy)
+    pos = {k0: (sx, sy)}
+    came = {k0: None}
+    best = {k0: 0.0}
+    pq = [(h(sx, sy), 0.0, k0)]
+    seen = 0
+    while pq:
+        _f, g, k = heapq.heappop(pq)
+        if g > best.get(k, np.inf):
+            continue
+        x, y = pos[k]
+        if np.hypot(x - goal[0], y - goal[1]) < GOAL_R:
+            out = []
+            while k is not None:
+                out.append(pos[k])
+                k = came[k]
+            return out[::-1]
+        seen += 1
+        if seen > cap:
+            return None
+        i, j = ij(x, y)
+        for a in range(N_ACTIONS):
+            if blocked[a, i, j]:
+                continue
+            nx = x + ACTION_LENGTH * np.cos(ACTION_BEARING[a])
+            ny = y + ACTION_LENGTH * np.sin(ACTION_BEARING[a])
+            if np.hypot(nx, ny) > RADIUS:
+                continue
+            nk = key(nx, ny)
+            ng = g + ACTION_LENGTH
+            if ng < best.get(nk, np.inf) - 1e-9:
+                best[nk] = ng
+                pos[nk] = (float(nx), float(ny))
+                came[nk] = k
+                heapq.heappush(pq, (ng + h(nx, ny), ng, nk))
+    return None
+
+
+def _draw_arena(ax, segs, start_xy, faint=False):
+    """Walls, obstacles, landmarks, goal, starts. Nothing else."""
     from matplotlib.patches import Circle
+    alpha = 0.35 if faint else 1.0
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 7))
+    ax.add_patch(Circle((0, 0), RADIUS, fill=False, lw=2.5, color='0.15',
+                        alpha=alpha, zorder=2))
 
-    for ax in (ax1, ax2):
-        ax.add_patch(Circle((0, 0), RADIUS, fill=False, lw=2.5, color='0.15'))
-        ax.set_aspect('equal')
-        ax.set_xlim(-RADIUS - 1.2, RADIUS + 1.2)
-        ax.set_ylim(-RADIUS - 1.2, RADIUS + 1.2)
-        ax.set_xticks(range(-10, 11, 5))
-        ax.set_yticks(range(-10, 11, 5))
-        ax.set_xlabel('x (m)')
+    # Obstacles, drawn as the caution tape they are textured with, so they
+    # read as a different kind of surface from the perimeter at a glance.
+    for sg in segs:
+        ax.plot([sg[0], sg[2]], [sg[1], sg[3]], lw=4.5, color='#e8b100',
+                solid_capstyle='round', alpha=alpha, zorder=3)
+        ax.plot([sg[0], sg[2]], [sg[1], sg[3]], lw=4.5, color='0.1',
+                solid_capstyle='butt', alpha=alpha, zorder=4,
+                dashes=(0.9, 1.1))
 
-    # --- A: the arena
-    gx, gy = grid_xy
-    ax1.scatter(gx, gy, s=0.12, c='0.86', marker='.', linewidths=0, zorder=0)
     r_mount = wall_mount_radius(RADIUS)
     for k, a in enumerate(landmark_angles(N_LANDMARKS)):
         x, y = r_mount * np.cos(a), r_mount * np.sin(a)
-        ax1.plot([x - PANEL / 2 * np.sin(a) * -1, x + PANEL / 2 * np.sin(a) * -1],
-                 [y - PANEL / 2 * np.cos(a), y + PANEL / 2 * np.cos(a)],
-                 lw=5, color=COLORS[k], solid_capstyle='butt', zorder=4)
-        ax1.text(10.9 * np.cos(a), 10.9 * np.sin(a), str(k), fontsize=8,
-                 ha='center', va='center', color='0.35')
-    for s in segs:
-        ax1.plot([s[0], s[2]], [s[1], s[3]], lw=3.2, color='0.1',
-                 solid_capstyle='round', zorder=3)
-    ax1.add_patch(Circle(GOAL, GOAL_R, fill=False, lw=1.0, ls='--',
-                         color='crimson', zorder=5))
-    ax1.plot(*GOAL, 'o', ms=10, color='crimson', zorder=6)
-    for i, (x, y, th) in enumerate(start_xy, start=1):
-        ax1.plot(x, y, 'o', ms=11, color='darkgreen', zorder=6)
-        ax1.annotate(str(i), (x, y), textcoords='offset points',
-                     xytext=(12, 9), fontsize=12, fontweight='bold',
-                     color='darkgreen')
-        ax1.annotate('', xy=GOAL, xytext=(x, y), zorder=2,
-                     arrowprops=dict(arrowstyle='->', color='0.6',
-                                     lw=1.0, ls=':'))
-    ax1.set_title(f'A   {NAME}\n{N_LANDMARKS} landmarks, {N_OBSTACLES} obstacles, '
-                  f'{len(gx):,} collection positions', fontsize=11)
+        tx, ty = -np.sin(a), np.cos(a)
+        ax.plot([x - PANEL / 2 * tx, x + PANEL / 2 * tx],
+                [y - PANEL / 2 * ty, y + PANEL / 2 * ty],
+                lw=6, color=COLORS[k], solid_capstyle='butt',
+                alpha=alpha, zorder=5)
+        ax.text(10.95 * np.cos(a), 10.95 * np.sin(a), str(k), fontsize=8,
+                ha='center', va='center', color='0.4', alpha=alpha)
+
+    ax.add_patch(Circle(GOAL, GOAL_R, fill=False, lw=1.0, ls='--',
+                        color='crimson', alpha=alpha, zorder=6))
+    ax.plot(*GOAL, 'o', ms=11, color='crimson', alpha=alpha, zorder=7)
+    for i, (x, y, _th) in enumerate(start_xy, start=1):
+        ax.plot(x, y, 'o', ms=11, color='darkgreen', alpha=alpha, zorder=7)
+        ax.annotate(str(i), (x, y), textcoords='offset points',
+                    xytext=(11, 8), fontsize=12, fontweight='bold',
+                    color='darkgreen', alpha=alpha)
+
+    ax.set_aspect('equal')
+    ax.set_xlim(-RADIUS - 1.4, RADIUS + 1.4)
+    ax.set_ylim(-RADIUS - 1.4, RADIUS + 1.4)
+    ax.set_xticks(range(-10, 11, 5))
+    ax.set_yticks(range(-10, 11, 5))
+    ax.set_xlabel('x (m)')
+
+
+def plot(segs, start_xy, paths, path_png):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 7))
+
+    _draw_arena(ax1, segs, start_xy)
+    ax1.set_title(f'A   {NAME}\n'
+                  f'r = {RADIUS:g} m  |  {N_LANDMARKS} landmarks  |  '
+                  f'{N_OBSTACLES} obstacles  |  goal at the origin\n'
+                  f'obstacles are caution-tape textured, the perimeter is '
+                  f'flat black', fontsize=11)
     ax1.set_ylabel('y (m)')
 
-    # --- B: the reachability proof
-    ax2.imshow(comp.T, origin='lower', cmap='Greens', alpha=0.55,
-               extent=[xs[0], xs[-1], ys[0], ys[-1]], vmin=0, vmax=1.6,
-               interpolation='nearest', zorder=1)
-    for s in segs:
-        ax2.plot([s[0], s[2]], [s[1], s[3]], lw=3.2, color='0.1',
-                 solid_capstyle='round', zorder=3)
-    ax2.plot(*GOAL, 'o', ms=10, color='crimson', zorder=6)
-    for i, (x, y, th) in enumerate(start_xy, start=1):
-        ax2.plot(x, y, 'o', ms=11, color='darkgreen', zorder=6)
-        ax2.annotate(str(i), (x, y), textcoords='offset points',
-                     xytext=(12, 9), fontsize=12, fontweight='bold',
-                     color='darkgreen')
-    ax2.set_title(f'B   free space {CLEAR} m wide, shaded where connected '
-                  f'to the goal\nall four starts inside it', fontsize=11)
+    _draw_arena(ax2, segs, start_xy, faint=True)
+    route = ['#1f77b4', '#d62728', '#7b3fa0', '#0d7d5a']
+    for i, path in enumerate(paths):
+        if path is None:
+            continue
+        px = [p[0] for p in path]
+        py = [p[1] for p in path]
+        ax2.plot(px, py, '-', lw=2.0, color=route[i % len(route)], zorder=9,
+                 label=f'start {i + 1}: {len(path) - 1} actions, '
+                       f'{(len(path) - 1) * ACTION_LENGTH:.1f} m')
+        ax2.plot(px, py, 'o', ms=2.6, color=route[i % len(route)], zorder=10)
+    ax2.legend(loc='lower left', fontsize=8.5, framealpha=0.9)
+    ax2.set_title('B   shortest route A* finds with the agent\'s own actions\n'
+                  f'{N_ACTIONS} moves of {ACTION_LENGTH} m on world bearings '
+                  f'45k, each refused unless\n'
+                  f'its 45 deg sector is clear to {MASK_RANGE} m',
+                  fontsize=11)
 
     fig.tight_layout()
-    fig.savefig(path, dpi=150)
+    fig.savefig(path_png, dpi=150)
     plt.close(fig)
 
 
@@ -481,9 +634,20 @@ def main():
         if segs is None:
             continue
         got = check_layout(segs, start_xy)
-        if got is not None:
-            free, comp, xs, ys = got
+        if got is None:
+            continue
+        free, comp, xs, ys = got
+        # The flood fill says a corridor exists; A* over the real action set
+        # says the agent can actually take it. The mask refuses a direction
+        # on a whole 45-degree sector, so a passage wide enough to stand in
+        # is not always one the agent will enter. A layout that survives the
+        # fill but not the search is rejected like any other.
+        blocked, _bxs, _bys = blocked_field(segs)
+        paths = [astar(p[:2], blocked) for p in start_xy]
+        if all(p is not None for p in paths):
             break
+        print(f'  attempt {attempt}: flood fill passed but A* found no route '
+              f'from {sum(p is None for p in paths)} start(s); resampling')
     else:
         raise SystemExit('no layout passed the reachability check; '
                          'lower N_OBSTACLES or CLEAR')
@@ -495,29 +659,34 @@ def main():
     write_xml(segs, start_xy, xml_path)
     grid_xy, spacing, free_area = write_positions(segs, csv_path)
     npts = len(grid_xy[0])
-    plot(segs, start_xy, comp, xs, ys, grid_xy, png_path)
+    plot(segs, start_xy, paths, png_path)
 
     gap = min(seg_seg_dist(segs[i], segs[j])
               for i in range(len(segs)) for j in range(i + 1, len(segs)))
     reach = 100.0 * comp.sum() / max(1, free.sum())
+    mean_len = float(np.mean(np.hypot(segs[:, 2] - segs[:, 0],
+                                      segs[:, 3] - segs[:, 1])))
     print(f'{NAME}  seed {SEED}, accepted on attempt {attempt}')
-    print(f'  obstacles      : {len(segs)}, '
-          f'{segs.shape[0] and np.mean(np.hypot(segs[:,2]-segs[:,0], segs[:,3]-segs[:,1])):.2f} m mean length')
+    print(f'  obstacles      : {len(segs)}, {mean_len:.2f} m mean length')
     print(f'  closest pair   : {gap:.2f} m  (need {GAP:.2f})')
     print(f'  free space     : {free_area:.1f} m^2 of {np.pi*RADIUS**2:.1f}')
     print(f'  reachable      : {reach:.1f}% of the {CLEAR} m free space '
           f'is connected to the goal')
     print(f'  positions      : {npts:,} at {spacing:.4f} m spacing '
           f'(target {N_TARGET:,})')
-    dist = geodesic(free, xs, ys, GOAL)
-    print(f'  {"start":<14s} {"to goal":>8s} {"walkable":>9s} {"detour":>7s}  '
-          f'straight line')
-    for i, (x, y, _t) in enumerate(start_xy, start=1):
+    print(f'  {"start":<22s} {"direct":>7s} {"A* actions":>11s} '
+          f'{"A* walked":>10s} {"detour":>7s}  straight line')
+    for i, ((x, y, _t), path) in enumerate(zip(start_xy, paths), start=1):
         d = float(np.hypot(x - GOAL[0], y - GOAL[1]))
-        g = float(dist[cell(xs, ys, x, y)])
-        blocked = straight_blocked(x, y, segs)
-        print(f'  {i} ({x:7.4f},{y:7.4f}) {d:7.2f}m {g:8.2f}m {g/d:7.2f}  '
-              f'{"BLOCKED" if blocked else "clear"}')
+        steps = len(path) - 1
+        walked = steps * ACTION_LENGTH
+        blocked_line = straight_blocked(x, y, segs)
+        print(f'  {i} ({x:7.4f},{y:7.4f})     {d:7.2f}m {steps:11d} '
+              f'{walked:9.1f}m {walked/d:7.2f}  '
+              f'{"BLOCKED" if blocked_line else "clear"}')
+    worst = max(len(p) - 1 for p in paths)
+    print(f'  longest route is {worst} actions against the '
+          f'{int(os.environ.get("REALM_MAX_STEPS", 200))}-step episode cap')
     print(f'  -> {xml_path}')
     print(f'  -> {csv_path}')
     print(f'  -> {png_path}')
