@@ -16,7 +16,7 @@ without editing anything. They are read once, at the top, and echoed:
                       instead of finding the arena by name
     REALM_ENSEMBLE    place-field .h5 to observe through
                       (data/vpce/place_fields/<maze>_visual.h5)
-    REALM_TIMESTEPS   training steps                 (100000)
+    REALM_TIMESTEPS   step ceiling, a backstop only  (250000)
     REALM_MAX_STEPS   steps per episode              (200)
     REALM_ALGO        DQN or PPO                     (DQN)
     REALM_TELEPORT    1 teleports actions, 0 drives  (1)
@@ -24,10 +24,10 @@ without editing anything. They are read once, at the top, and echoed:
     REALM_SEED        random seed                    (0)
     REALM_RUN_TAG     names the output directory     (derived)
     REALM_EVAL_ONLY   1 to load the saved model and only evaluate
-    REALM_STOP_AT     success rate counting as converged       (0.8)
-    REALM_MAX_EPISODES give up after this many episodes        (unlimited)
-    REALM_GIVE_UP_BELOW  abandon under this success rate       (0.10)
-    REALM_GIVE_UP_AFTER  fraction of the budget before checking (0.5)
+    REALM_MAX_EPISODES episodes the agent gets                (1000)
+    REALM_ESR_THRESHOLD mean extra-step ratio to stop under    (1.5)
+    REALM_ESR_WINDOW   trailing episodes the means run over    (100)
+    REALM_MIN_PER_START episodes a start needs to be judged    (10)
     REALM_DEVICE      cpu or cuda for the network             (cpu)
 
 Output goes to data/vpce/rl_runs/<tag>/: the SB3 model, the Monitor CSV of
@@ -93,7 +93,8 @@ from realm_tools.rl_lib import VpceObserver, WebotsEnv, RewardConfig
 from realm_tools.simulation_lib.arena_paths import arena_xml
 from realm_tools.simulation_lib.webots_exit import quit_on_crash
 from realm_tools.rl_lib.agents import make_agent, algo_kwargs
-from realm_tools.rl_lib.callbacks import ConvergenceStopper
+from realm_tools.rl_lib.callbacks import ExtraStepStopper, extra_step_ratio
+from realm_tools.rl_lib.optimal_paths import optimal_steps
 
 MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r10')
 # The arena's name says which environments directory it is in, so nothing
@@ -101,22 +102,21 @@ MAZE = os.environ.get('REALM_MAZE', 'circ_lm8_r10')
 ARENA_XML = arena_xml(MAZE)
 ENSEMBLE = os.environ.get(
     'REALM_ENSEMBLE', f'data/vpce/place_fields/{MAZE}_visual.h5')
-TIMESTEPS = int(os.environ.get('REALM_TIMESTEPS', 100_000))
+# A BACKSTOP, not the budget. Episodes decide when the run ends; this
+# only stops a pathological run from deciding its own walltime. 1000
+# episodes at the 200-step cap is 200k steps, so this sits above the
+# worst case and normally never binds.
+TIMESTEPS = int(os.environ.get('REALM_TIMESTEPS', 250_000))
 MAX_STEPS = int(os.environ.get('REALM_MAX_STEPS', 200))
 ALGO = os.environ.get('REALM_ALGO', 'DQN').upper()
 TELEPORT = os.environ.get('REALM_TELEPORT', '1') == '1'
 SHAPING = float(os.environ.get('REALM_SHAPING', 0.0))
 SEED = int(os.environ.get('REALM_SEED', 0))
 EVAL_ONLY = os.environ.get('REALM_EVAL_ONLY', '0') == '1'
-STOP_AT = float(os.environ.get('REALM_STOP_AT', 0.8))
-MAX_EPISODES = int(os.environ.get('REALM_MAX_EPISODES', 0)) or None
-# Abandon a run that is clearly not learning, rather than spending the rest
-# of the budget rendering for nothing. Checked only after half the budget,
-# well past DQN's 30% exploration anneal, so it reads the policy and not
-# epsilon. Set REALM_GIVE_UP_BELOW=0 to disable.
-GIVE_UP_BELOW = float(os.environ.get('REALM_GIVE_UP_BELOW', 0.10)) or None
-GIVE_UP_AFTER = int(float(os.environ.get('REALM_GIVE_UP_AFTER', 0.5))
-                    * TIMESTEPS)
+MAX_EPISODES = int(os.environ.get('REALM_MAX_EPISODES', 1000))
+ESR_THRESHOLD = float(os.environ.get('REALM_ESR_THRESHOLD', 1.5))
+ESR_WINDOW = int(os.environ.get('REALM_ESR_WINDOW', 100))
+MIN_PER_START = int(os.environ.get('REALM_MIN_PER_START', 10))
 TAG = os.environ.get(
     'REALM_RUN_TAG',
     f'{MAZE}_{ALGO.lower()}_s{SEED}' + ('_shaped' if SHAPING else ''))
@@ -124,11 +124,12 @@ TAG = os.environ.get(
 OUT_DIR = f'data/vpce/rl_runs/{TAG}'
 os.makedirs(OUT_DIR, exist_ok=True)
 
-print(f'maze={MAZE}  algo={ALGO}  steps={TIMESTEPS}  teleport={TELEPORT}  '
+print(f'maze={MAZE}  algo={ALGO}  teleport={TELEPORT}  '
       f'shaping={SHAPING}  seed={SEED}', flush=True)
-print(f'stop at {STOP_AT:.0%} success; give up below '
-      f'{GIVE_UP_BELOW if GIVE_UP_BELOW else 0:.0%} after {GIVE_UP_AFTER:,} '
-      f'steps', flush=True)
+print(f'stop when every start averages under {ESR_THRESHOLD:g} extra steps '
+      f'per optimal step\n  over the last {ESR_WINDOW} episodes; '
+      f'{MAX_EPISODES} episodes at most, {TIMESTEPS:,} steps as a backstop',
+      flush=True)
 print(f'ensemble: {ENSEMBLE}', flush=True)
 print(f'output  : {OUT_DIR}', flush=True)
 
@@ -160,6 +161,29 @@ robot = MyRobot()
 quit_webots = quit_on_crash(robot)
 robot.load_environment(ARENA_XML, floor_texture='carpet')
 
+# How few actions the task needs from each start, by A* over the agent's own
+# move set. This is the denominator of every extra-step ratio below: the
+# stopping rule, the greedy checks between stretches, and the final report
+# all measure the policy against it.
+#
+# Computed here rather than read from the arena file. These numbers depend
+# on the action length, the eight bearings, the mask range, the body buffer
+# and the goal radius; a stored value would go stale the moment any of them
+# moved, and silently. Two or three seconds, once.
+import xml.etree.ElementTree as _ET                          # noqa: E402
+
+_arena_root = _ET.parse(ARENA_XML).getroot()
+_start_xy = [(float(p.get('x')), float(p.get('y')))
+             for p in _arena_root.find('train_start_positions').findall('pos')]
+GOAL_XY = robot.maze.get_goal_location()
+print('\noptimal routes, A* over the agent\'s own action set:', flush=True)
+OPTIMAL = optimal_steps(_arena_root, _start_xy, goal=GOAL_XY)
+if not any(OPTIMAL.values()):
+    print('ERROR: A* could not reach the goal from any start. The stopping '
+          'rule has no\n  denominator, so this run would have no way to '
+          'tell a good route from a bad one.', file=sys.stderr, flush=True)
+    sys.exit(1)
+
 env = WebotsEnv(
     robot, observer,
     max_steps=MAX_STEPS,
@@ -175,7 +199,7 @@ from stable_baselines3.common.monitor import Monitor
 # learning curve, so it is written incrementally rather than at the end --
 # a run killed by the walltime still leaves everything up to that point.
 env = Monitor(env, filename=f'{OUT_DIR}/monitor.csv',
-              info_keywords=('is_success',))
+              info_keywords=('is_success', 'start_index'))
 
 MODEL_PATH = f'{OUT_DIR}/model.zip'
 if ALGO not in ('DQN', 'PPO'):
@@ -186,15 +210,17 @@ if ALGO not in ('DQN', 'PPO'):
 with open(f'{OUT_DIR}/config.json', 'w') as f:
     json.dump(dict(maze=MAZE, ensemble=ENSEMBLE, n_cells=int(observer.n_cells),
                    channels=list(observer.channels), algo=ALGO,
-                   timesteps=TIMESTEPS, max_steps=MAX_STEPS,
+                   step_ceiling=TIMESTEPS, max_steps=MAX_STEPS,
                    teleport=TELEPORT, shaping=SHAPING, seed=SEED,
                    tag=TAG,
                    # Recorded so a run can be reproduced, and so a sweep
                    # can be checked for having held them constant. The
                    # give-up bound especially: a run it stopped is not
                    # comparable with one that had the full budget.
-                   give_up_below=GIVE_UP_BELOW,
-                   give_up_after_steps=GIVE_UP_AFTER,
+                   max_episodes=MAX_EPISODES,
+                   optimal_steps={str(k): v for k, v in OPTIMAL.items()},
+                   esr_threshold=ESR_THRESHOLD, esr_window=ESR_WINDOW,
+                   min_per_start=MIN_PER_START,
                    hyperparameters=algo_kwargs(ALGO)), f, indent=2)
 
 
@@ -278,85 +304,90 @@ else:
     print(f'before training: success {rate0:.0%}  mean steps {len0:.1f}',
           flush=True)
 
-    def verify_deterministic():
-        """Fraction of starts the greedy policy actually solves.
+    def greedy_extra_steps():
+        """One deterministic rollout per start, scored as extra-step ratios.
 
-        Only ever called BETWEEN learn() calls. Calling it from inside a
-        callback resets and steps the training environment in the middle of
-        SB3's rollout collection, which raises "Tried to step environment
-        that needs reset" -- or, worse, would silently resume training from
-        an observation SB3 never took.
+        Only ever called BETWEEN learn() calls. From inside a callback this
+        resets and steps the training environment in the middle of SB3's
+        rollout collection, which raises "Tried to step environment that
+        needs reset" -- or worse, would silently resume training from an
+        observation SB3 never took.
+
+        A start the greedy policy fails is charged at the episode cap, the
+        same way a timeout is charged during training, so the number means
+        the same thing in both places.
         """
-        n = env.unwrapped.n_starts()
-        if n <= 0:
-            return 1.0
-        return sum(rollout(model, start_index=i)[0] for i in range(n)) / n
+        out = {}
+        for i in range(max(env.unwrapped.n_starts(), 0)):
+            if not OPTIMAL.get(i):
+                continue
+            reached, steps = rollout(model, start_index=i)
+            out[i] = (extra_step_ratio(steps if reached else MAX_STEPS,
+                                       OPTIMAL[i]), reached, steps)
+        return out
 
-    # The give-up floor has to sit ABOVE what an untrained policy already
-    # scores, or it can never fire. Measured here: pre-training success ran
-    # 20-50% across runs, because a random walk finds a 0.8 m goal in a 10 m
-    # arena often enough. A fixed 10% floor was therefore inert on exactly
-    # the runs it existed to cut short.
-    #
-    # So it is relative to the baseline this run just measured: abandon only
-    # if, halfway through the budget, the agent is no better than it was
-    # before training. Capped at 0.5 because rate0 comes from 10 episodes
-    # and is noisy, and a high draw must not set a floor that kills a run
-    # which is genuinely learning.
-    give_up_floor = min(0.5, max(GIVE_UP_BELOW, rate0 + 0.10))
-    print(f'give up below {give_up_floor:.0%} after {GIVE_UP_AFTER:,} steps '
-          f'(untrained baseline was {rate0:.0%})', flush=True)
-
-    stopper = ConvergenceStopper(threshold=STOP_AT, max_episodes=MAX_EPISODES,
-                                 give_up_below=give_up_floor,
-                                 give_up_after_steps=GIVE_UP_AFTER)
+    stopper = ExtraStepStopper(OPTIMAL, threshold=ESR_THRESHOLD,
+                               window=ESR_WINDOW,
+                               min_per_start=MIN_PER_START,
+                               max_episodes=MAX_EPISODES)
 
     # Training in stretches, so the greedy policy can be checked where the
-    # environment is idle. The stopper ends a stretch when the trailing
-    # training window clears the threshold; if the deterministic rollouts
-    # agree, the run is done, and if they do not, training resumes with the
-    # bar raised so it does not stop again on the same window.
+    # environment is idle. The stopper ends a stretch when every start's
+    # trailing mean ESR is under the bar; if the greedy rollouts agree the
+    # run is done, and if they do not, training resumes with the bar held
+    # for another window so it cannot stop again on the same episodes.
     #
-    # A stop for any other reason -- gave up, or the timestep budget -- is
-    # final and breaks out.
-    while model.num_timesteps < TIMESTEPS:
-        remaining = TIMESTEPS - model.num_timesteps
-        model.learn(total_timesteps=remaining, progress_bar=False,
-                    callback=stopper, reset_num_timesteps=False)
+    # Any other stop -- the episode cap, the step backstop -- is final.
+    while (model.num_timesteps < TIMESTEPS
+           and stopper.episodes < MAX_EPISODES):
+        model.learn(total_timesteps=TIMESTEPS - model.num_timesteps,
+                    progress_bar=False, callback=stopper,
+                    reset_num_timesteps=False)
         if stopper.stop_reason != 'converged':
             break
-        checked = verify_deterministic()
-        stopper.verifications.append(
-            dict(episode=stopper.episodes, steps=int(model.num_timesteps),
-                 training=stopper.success_rate, deterministic=checked))
-        if checked >= 1.0:
-            print(f'\nconverged: {checked:.0%} of starts solved '
-                  f'deterministically after {stopper.episodes} episodes / '
-                  f'{model.num_timesteps} steps', flush=True)
+
+        checked = greedy_extra_steps()
+        worst = max((v[0] for v in checked.values()), default=float('inf'))
+        stopper.verifications.append(dict(
+            episode=stopper.episodes, steps=int(model.num_timesteps),
+            training_worst_esr=stopper.worst, greedy_worst_esr=worst,
+            greedy={str(k): dict(esr=round(v[0], 4), reached=bool(v[1]),
+                                 steps=int(v[2]))
+                    for k, v in checked.items()}))
+
+        print(f'\n[check] greedy routes at episode {stopper.episodes}:',
+              flush=True)
+        for i, (esr, reached, steps) in sorted(checked.items()):
+            print(f'    start {i}: {steps} steps against {OPTIMAL[i]} '
+                  f'optimal  ESR {esr:+.2f}'
+                  + ('' if reached else '   TIMED OUT'), flush=True)
+
+        if worst < ESR_THRESHOLD:
+            print(f'\nconverged: worst start {worst:+.2f} extra steps per '
+                  f'optimal step, under the {ESR_THRESHOLD:g} bar, after '
+                  f'{stopper.episodes} episodes / {model.num_timesteps} '
+                  f'steps', flush=True)
             break
-        print(f'\n[check] {stopper.success_rate:.0%} in training but '
-              f'{checked:.0%} deterministic at episode {stopper.episodes} '
-              f'-- not converged, continuing', flush=True)
+
+        print(f'  worst greedy start is {worst:+.2f}, over the '
+              f'{ESR_THRESHOLD:g} bar -- training continues', flush=True)
         stopper.stop_reason = None
-        stopper.min_episodes_next = stopper.episodes + 100
-        # The rollouts above ended their episodes, so Monitor now needs a
-        # reset -- and learn(reset_num_timesteps=False) resumes by STEPPING,
-        # which raises "Tried to step environment that needs reset".
-        # Discarding _last_obs is SB3's own idiom for this (base_class.py
-        # does it in set_env): _setup_learn resets the env when _last_obs is
-        # None, so training restarts from a clean episode instead of from a
-        # state the verification left behind.
-        model._last_obs = None
+        stopper.min_episodes_next = stopper.episodes + ESR_WINDOW
 
     model.save(MODEL_PATH)
     stop = stopper.summary()
-    if stop['stop_reason'] == 'budget_exhausted' and stopper.verifications:
+    if (stop['stop_reason'] in ('episode_budget_exhausted',
+                                'step_ceiling_reached')
+            and stopper.verifications):
         # Distinguish "never looked converged" from "looked converged
         # repeatedly and never held up" -- very different findings.
-        stop['stop_reason'] = 'budget_exhausted_after_failed_checks'
-    print(f'\ntraining ended: {stop["stop_reason"]} after {stop["episodes"]} '
-          f'episodes ({stop["final_success_rate"]:.0%} success over the last '
-          f'{stop["window"]})', flush=True)
+        stop['stop_reason'] += '_after_failed_checks'
+    worst = stop['worst_mean_esr']
+    print(f'\ntraining ended: {stop["stop_reason"]} after '
+          f'{stop["episodes"]} episodes; worst start averaged '
+          + ('n/a' if worst is None else f'{worst:+.2f}')
+          + f' extra steps per optimal step over the last {stop["window"]}',
+          flush=True)
 
     rate1, len1 = evaluate(model, label='final eval')
     print(f'after training : success {rate1:.0%}  mean steps {len1:.1f}',

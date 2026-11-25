@@ -186,6 +186,11 @@ class WebotsEnv(gym.Env):
             # Read by SB3's Monitor and by the learning-time analysis. Only
             # meaningful on the final step of an episode.
             'is_success': bool(terminated),
+            # Which start this episode began from. The stopping rule scores
+            # an episode against the OPTIMAL route from its own start, and
+            # those differ by nearly two to one across the arena, so an
+            # episode that does not say where it began cannot be scored.
+            'start_index': int(self.start_idx),
         }
 
     # ----------------------------------------------------------- gym API

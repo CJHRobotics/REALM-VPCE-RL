@@ -17,12 +17,38 @@
 #   REALM_MAX_EPISODES=3000 sbatch slurm/train_rl.sh circ_lm8_r10
 #   bash slurm/train_rl.sh --submit circ_lm8_r10   # DQN and PPO x 3 seeds
 #
-# Training stops early on convergence (REALM_STOP_AT, default 0.8 success
-# over the last 100 episodes) or gives up after REALM_MAX_EPISODES. Either
-# way it then runs one deterministic episode from each of the arena's start
-# positions and draws final_paths.png -- the routes the policy actually
-# takes. A failure has a shape, so that figure is drawn whether the run
-# converged or not.
+# WHEN A RUN STOPS. Every episode is scored by its EXTRA-STEP RATIO,
+#
+#     ESR = (steps taken - optimal steps) / optimal steps
+#
+# where the optimum is A* over the agent's own eight bearings and 0.5 m
+# step, from that episode's own start, computed at startup. 0 means the
+# agent matched the best route available to it; negative is possible,
+# since A* respects a body buffer the policy does not know about.
+#
+# Training stops as CONVERGED when, over the last REALM_ESR_WINDOW episodes
+# (100), every start has at least REALM_MIN_PER_START episodes (10) and
+# every start's MEAN ESR is below REALM_ESR_THRESHOLD (1.5). Per start, not
+# pooled: a pooled mean is exactly the statistic that lets three good starts
+# carry a bad one, which is the failure this rule was written for -- a run
+# declared converged with one start taking 148 actions against an optimum
+# of 10. It then verifies greedily, one deterministic rollout per start,
+# and accepts only if every start clears the same bar there too.
+#
+# Training stops as EPISODE BUDGET EXHAUSTED at REALM_MAX_EPISODES (1000).
+# Episodes, not steps: it is the number of ATTEMPTS the agent gets, which
+# is what a learning-speed comparison is about, and unlike a step budget it
+# does not quietly shrink as the agent improves.
+#
+# There is NO success threshold and no give-up floor. A timeout runs the
+# full episode cap, so its ESR is (200 - optimal)/optimal -- about 19 at a
+# 10-step optimum -- and failure is already inside the metric at a rate no
+# window of failures can average away. The step ceiling is a backstop
+# against a pathological run choosing its own walltime, nothing more.
+#
+# Either way the run then draws final_paths.png -- the routes the policy
+# actually takes. A failure has a shape, so that figure is drawn whether
+# the run converged or not.
 #
 # Everything is configured through the environment; the controller reads it
 # and echoes it. See simulation/controllers/rl_agent/rl_agent.py.
@@ -179,8 +205,10 @@ echo "Job     : ${SLURM_JOB_ID:-local}   node $(hostname)"
 echo "Arena   : $ARENA"
 echo "Ensemble: $ENSEMBLE"
 echo "Run tag : $TAG   ->  $OUT_DIR"
-echo "Algo    : ${REALM_ALGO:-DQN}   steps=${REALM_TIMESTEPS:-100000}  seed=${REALM_SEED:-0}"
-echo "Stop at : ${REALM_STOP_AT:-0.8} success   abandon below ${REALM_GIVE_UP_BELOW:-0.10} after ${REALM_GIVE_UP_AFTER:-0.5} of the budget"
+echo "Algo    : ${REALM_ALGO:-DQN}   seed=${REALM_SEED:-0}"
+echo "Stop at : every start under ${REALM_ESR_THRESHOLD:-1.5} extra steps per optimal step,"
+echo "          averaged over the last ${REALM_ESR_WINDOW:-100} episodes"
+echo "Budget  : ${REALM_MAX_EPISODES:-1000} episodes   (${REALM_TIMESTEPS:-250000} steps as a backstop)"
 echo "Teleport: ${REALM_TELEPORT:-1}   shaping=${REALM_SHAPING:-0}"
 echo "Image   : $SIF"
 echo "Python  : $PYTHON_BIN"
@@ -228,17 +256,17 @@ timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
     --env REALM_ARENA_DIR="${REALM_ARENA_DIR:-}" \
     --env REALM_ENSEMBLE="$ENSEMBLE" \
     --env REALM_RUN_TAG="$TAG" \
-    --env REALM_TIMESTEPS="${REALM_TIMESTEPS:-100000}" \
+    --env REALM_TIMESTEPS="${REALM_TIMESTEPS:-250000}" \
     --env REALM_MAX_STEPS="${REALM_MAX_STEPS:-200}" \
     --env REALM_ALGO="${REALM_ALGO:-DQN}" \
     --env REALM_TELEPORT="${REALM_TELEPORT:-1}" \
     --env REALM_SHAPING="${REALM_SHAPING:-0}" \
     --env REALM_SEED="${REALM_SEED:-0}" \
     --env REALM_EVAL_ONLY="${REALM_EVAL_ONLY:-0}" \
-    --env REALM_STOP_AT="${REALM_STOP_AT:-0.8}" \
-    --env REALM_MAX_EPISODES="${REALM_MAX_EPISODES:-0}" \
-    --env REALM_GIVE_UP_BELOW="${REALM_GIVE_UP_BELOW:-0.10}" \
-    --env REALM_GIVE_UP_AFTER="${REALM_GIVE_UP_AFTER:-0.5}" \
+    --env REALM_MAX_EPISODES="${REALM_MAX_EPISODES:-1000}" \
+    --env REALM_ESR_THRESHOLD="${REALM_ESR_THRESHOLD:-1.5}" \
+    --env REALM_ESR_WINDOW="${REALM_ESR_WINDOW:-100}" \
+    --env REALM_MIN_PER_START="${REALM_MIN_PER_START:-10}" \
     --env REALM_DEVICE="${REALM_DEVICE:-cpu}" \
     --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \

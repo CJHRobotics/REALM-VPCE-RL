@@ -123,100 +123,15 @@ def _drive(stop, success, max_calls=400):
     return None
 
 
-def test_stopper_can_be_resumed_after_a_failed_check():
-    """The caller raises the bar and training continues.
-
-    Verification cannot happen inside the callback -- resetting the
-    training env mid-rollout raises "Tried to step environment that needs
-    reset". So the stopper ends a stretch, the caller checks the greedy
-    policy, and on a failure sets min_episodes_next and resumes. This is
-    that contract.
-    """
-    from realm_tools.rl_lib.callbacks import ConvergenceStopper
-    stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
-                              verbose=0)
-    stop.num_timesteps = 0
-
-    first = _drive(stop, success=1)
-    assert first == 10, f'first stretch ended at {first}'
-    assert stop.stop_reason == 'converged'
-
-    # The caller checked the greedy policy, it failed, so it resumes with
-    # the bar raised.
-    stop.stop_reason = None
-    stop.min_episodes_next = stop.episodes + 25
-    second = _drive(stop, success=1)
-    assert second is not None, 'never stopped again'
-    assert stop.episodes == 35, (
-        f'resumed to episode {stop.episodes}; should have run 25 more '
-        f'before stopping again')
-    return 'a failed check resumes training with the bar raised'
-
-
-def test_stopper_without_verify_stops_on_training_alone():
-    """The old behaviour is still available when no check is supplied."""
-    from realm_tools.rl_lib.callbacks import ConvergenceStopper
-    stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
-                              verbose=0)
-    stop.num_timesteps = 0
-    stopped_at = _drive(stop, success=1)
-    assert stopped_at == 10, f'stopped after {stopped_at}'
-    assert stop.stop_reason == 'converged'
-    return 'stops on the training window when no verifier is given'
-
-
-def test_gives_up_on_no_progress_but_only_after_the_step_gate():
-    """The bound must not fire while exploration is still annealing.
-
-    Checked before the gate, a trailing success rate reads epsilon-greedy
-    noise rather than the policy, and would abandon runs that were about to
-    learn. Checked after it, a run still near zero is genuinely stuck.
-    """
-    from realm_tools.rl_lib.callbacks import ConvergenceStopper
-    stop = ConvergenceStopper(window=10, threshold=0.8, min_episodes=10,
-                              give_up_below=0.2, give_up_after_steps=1000,
-                              verbose=0)
-    stop.num_timesteps = 500            # before the gate
-    assert _drive(stop, success=0, max_calls=40) is None, (
-        'gave up before the step gate')
-    assert stop.stop_reason is None
-
-    stop.num_timesteps = 1500           # past the gate
-    assert _drive(stop, success=0, max_calls=40) is not None, (
-        'did not give up after the step gate')
-    assert stop.stop_reason == 'gave_up_no_progress'
-    assert stop.summary()['give_up_below'] == 0.2
-    return 'held before the gate, abandoned after it'
-
-
-def test_no_progress_bound_spares_a_learning_run():
-    """A run above the floor keeps its budget."""
-    from realm_tools.rl_lib.callbacks import ConvergenceStopper
-    stop = ConvergenceStopper(window=10, threshold=0.95, min_episodes=10,
-                              give_up_below=0.2, give_up_after_steps=0,
-                              verbose=0)
-    stop.num_timesteps = 10_000
-    # 50% success: well under the 95% convergence bar, well over the 20%
-    # floor. It should be left alone to keep learning.
-    ep_ok = {'episode': {'r': 1.0, 'l': 5, 'is_success': 1.0}}
-    ep_no = {'episode': {'r': 0.0, 'l': 5, 'is_success': 0.0}}
-    for i in range(60):
-        stop.locals = {'infos': [ep_ok if i % 2 else ep_no]}
-        assert stop._on_step() is not False, f'abandoned at episode {i}'
-    assert stop.stop_reason is None
-    return 'a run at 50% is neither converged nor abandoned'
-
-
-def test_stopper_gives_up():
-    from realm_tools.rl_lib.callbacks import ConvergenceStopper
-    stop = ConvergenceStopper(window=10, threshold=0.9, min_episodes=5,
-                              max_episodes=20, verbose=0)
-    stop.num_timesteps = 0
-    stopped_at = _drive(stop, success=0)
-    assert stopped_at == 20, f'gave up after {stopped_at}, expected 20'
-    assert stop.stop_reason == 'gave_up'
-    assert stop.summary()['episodes'] == 20
-    return 'gives up after the episode limit with no convergence'
+# The stopper tests that lived here are gone, not ported. They checked a
+# rule that no longer exists: convergence on 80% success over a trailing
+# window, and a give-up floor on that same success rate. Both were replaced
+# by the extra-step ratio, where a timeout is charged at the episode cap and
+# success is inside the metric rather than beside it.
+#
+# tests/test_stopping_rule.py covers the rule that replaced them, including
+# the case that prompted the change -- a run declared converged with one
+# start taking 148 actions against an optimum of 10.
 
 
 def main():

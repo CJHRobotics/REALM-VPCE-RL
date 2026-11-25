@@ -1,18 +1,67 @@
-"""Stopping training when there is nothing left to learn, or no sign of it.
+"""Stopping training when the routes are good enough, not merely finished.
 
-Two reasons to stop early, and both save renders, which is the expensive
-thing here. An agent that has converged learns nothing more from another
-20,000 steps. An agent that has shown no sign of succeeding after a long
-while is unlikely to start, and a sweep across representations will contain
-conditions that simply do not work -- discovering that in an hour instead of
-a day is the difference between a sweep that finishes and one that does not.
+THE RULE, in full:
 
-Either way the run ends with a reason recorded, so the figures and the
-result file say which happened rather than leaving it to be inferred from a
-step count.
+    An episode scores an EXTRA-STEP RATIO
+
+        ESR = (steps taken - optimal steps) / optimal steps
+
+    where the optimum is A* over the agent's own action set from that
+    episode's own start (realm_tools/rl_lib/optimal_paths.py). 0 means the
+    agent matched the best route available to it. Negative is possible --
+    A* respects a body buffer the policy does not know about. Positive is
+    how much further it went than it had to.
+
+    Training stops as CONVERGED when, over the trailing `window` episodes:
+
+      * every start has at least `min_per_start` episodes in the window, and
+      * every start's MEAN ESR is below `threshold`.
+
+    Training stops as EPISODE BUDGET EXHAUSTED at `max_episodes`.
+
+    The caller then verifies greedily -- one deterministic rollout per
+    start -- and only accepts convergence if every start's ESR clears the
+    same threshold there too. Otherwise the bar is raised and training
+    resumes.
+
+WHY PER START AND NOT POOLED. A pooled mean over randomly drawn starts is
+exactly the statistic that hides the failure this rule exists to catch. The
+run that prompted it reached all four starts and was declared converged,
+while one of them took 148 actions against an optimum of 10 -- ESR 13.8,
+against 0.6, 0.1 and 0.3 for the others. Pooled, that is a mean of 3.7 and
+a quarter of the window; one bad start can be carried by three good ones
+and, as episodes are drawn at random, by luck in how often it comes up.
+Per start, it cannot.
+
+WHY THERE IS NO SUCCESS THRESHOLD ANY MORE. There used to be one -- 80% of
+the last 100 episodes reaching the goal -- and it is now redundant and
+worse than redundant. A timeout runs the full episode cap, so its length IS
+the cap and its ESR is (max_steps - optimal)/optimal: at a 200-step cap and
+a 10-step optimum, 19.0. Failure is already inside the metric, charged at a
+rate no window of failures can average away. Keeping a separate success
+threshold would mean two knobs that fight: a policy could satisfy one and
+not the other, and which stopped the run would depend on their relative
+settings rather than on the agent.
+
+WHAT WENT WITH IT. The old give-up rule abandoned a run whose success rate
+stayed under a floor past half the step budget. It was a success-rate
+device and it goes with the success rate. The episode cap now bounds the
+cost instead: a run that never learns spends `max_episodes` episodes of at
+most `max_steps` each and stops, with its reason recorded. That is a
+blunter bound and a far more predictable one.
+
+NOT VERIFYING HERE, deliberately. An earlier version took a `verify`
+callable and ran deterministic rollouts from inside the callback. That
+raised "Tried to step environment that needs reset", because a callback
+runs in the middle of SB3's rollout collection and resetting the training
+environment there destroys the episode state the VecEnv and Monitor hold.
+Had it not raised it would have been worse: training would have resumed
+from an observation SB3 never took. Verification belongs between calls to
+learn(), where the environment is idle. See the loop in the rl_agent
+controller.
 """
 
-from collections import deque
+from collections import defaultdict, deque
 
 try:
     from stable_baselines3.common.callbacks import BaseCallback
@@ -20,148 +69,153 @@ except ImportError:                                         # pragma: no cover
     BaseCallback = object
 
 
-class ConvergenceStopper(BaseCallback):
-    """Stop on sustained success, or give up after `max_episodes`.
+def extra_step_ratio(steps, optimal):
+    """(steps - optimal) / optimal, or None when the start has no optimum."""
+    if not optimal:
+        return None
+    return (float(steps) - float(optimal)) / float(optimal)
+
+
+class ExtraStepStopper(BaseCallback):
+    """Stop when every start's trailing mean ESR is under `threshold`.
 
     Parameters
     ----------
-    window : int
-        Episodes in the trailing window the success rate is measured over.
+    optimal : dict
+        {start index: fewest actions}, from optimal_paths.optimal_steps. A
+        start mapped to None or missing is skipped: it cannot be scored, and
+        scoring it against a guess would be worse than not scoring it.
     threshold : float
-        Success rate the window must reach to count as converged.
-    min_episodes : int
-        Never declare convergence before this many episodes. This is not
-        caution for its own sake -- early in training epsilon is near 1, and
-        in an arena where a random walk reaches the goal reasonably often
-        the trailing success rate can clear a high bar on luck alone. Left
-        unguarded, a run would "converge" during exploration and stop before
-        learning anything.
-    max_episodes : int or None
-        Give up after this many episodes regardless. None leaves the
-        timestep budget as the only limit.
-
-        Note this is a weak bound in practice. Episodes shorten as an agent
-        improves, so an episode cap binds only on runs that are ALREADY
-        succeeding -- at a 100k-step budget and a 200-step cap, a run that
-        never learns reaches about 500 episodes, so any cap above that is
-        inert on exactly the runs worth cutting short. Use the two below
-        for that.
-    give_up_below : float or None
-        Success rate under which the run is abandoned, checked only after
-        `give_up_after_steps`. None disables it.
-    give_up_after_steps : int or None
-        When to start checking. This must sit after exploration has
-        annealed, or the check reads epsilon-greedy noise rather than the
-        policy: DQN explores over the first 30% of its budget by default,
-        and a trailing success rate before that says nothing about whether
-        the agent is learning.
-
-        A run stopped this way is recorded as 'gave_up_no_progress' and is
-        NOT comparable with one that had its full budget -- it did not fail
-        to converge in 100k steps, it was never given 100k steps. Any
-        comparison that pools the two is measuring the bound.
-    NOT verifying here, deliberately
-        An earlier version took a `verify` callable and ran deterministic
-        rollouts from inside this callback. That is wrong, and it raised
-        "Tried to step environment that needs reset": a callback runs in the
-        middle of SB3's rollout collection, and resetting or stepping the
-        training environment from there destroys the episode state the
-        VecEnv and Monitor are holding. Had it not raised, it would have
-        been worse -- training would have resumed from an observation SB3
-        did not take, corrupting the run silently.
-
-        Verification belongs BETWEEN calls to learn(), where the environment
-        is idle. This callback stops on the training criterion and records
-        why; the caller then checks the greedy policy and resumes training
-        if it is not good enough. See the loop in the rl_agent controller.
+        Mean extra-step ratio a start must be under. 1.5 means routes
+        averaging two and a half times the optimum.
+    window : int
+        Trailing episodes the means are taken over, across all starts.
+    min_per_start : int
+        Episodes a start needs inside that window before it can be judged.
+        Without it a start seen twice could pass on two lucky episodes.
+    max_episodes : int
+        Hard cap. Episodes, not steps: it is the number of ATTEMPTS the
+        agent gets, which is the quantity a learning-speed comparison is
+        about, and it does not shrink as the agent improves the way a step
+        budget effectively does.
     """
 
-    def __init__(self, window=100, threshold=0.8, min_episodes=300,
-                 max_episodes=None, give_up_below=None,
-                 give_up_after_steps=None, verbose=1):
+    def __init__(self, optimal, threshold=1.5, window=100, min_per_start=10,
+                 max_episodes=1000, verbose=1):
         super().__init__(verbose)
-        self.window = int(window)
+        self.optimal = {int(k): v for k, v in (optimal or {}).items()}
         self.threshold = float(threshold)
-        self.min_episodes = int(min_episodes)
-        self.max_episodes = max_episodes
-        self.give_up_below = give_up_below
-        self.give_up_after_steps = give_up_after_steps
-        self.successes = deque(maxlen=self.window)
+        self.window = int(window)
+        self.min_per_start = int(min_per_start)
+        self.max_episodes = int(max_episodes)
+
+        self.recent = deque(maxlen=self.window)     # (start_index, esr)
         self.episodes = 0
-        # Set by the caller after a failed deterministic check, so the next
-        # stretch of training does not stop again on the same window.
+        self.scored = 0
+        self.unscored = 0
+        # Raised by the caller after a failed greedy check, so the next
+        # stretch cannot stop again on the same window.
         self.min_episodes_next = 0
         self.verifications = []
-        # Set when training stops early: 'converged' or 'gave_up'. Left None
-        # when the timestep budget ran out first.
         self.stop_reason = None
         self.stop_episode = None
 
+    # ------------------------------------------------------------- state
+
+    def per_start(self):
+        """{start index: (n in window, mean ESR)}."""
+        acc = defaultdict(list)
+        for start, esr in self.recent:
+            acc[start].append(esr)
+        return {s: (len(v), sum(v) / len(v)) for s, v in acc.items()}
+
     @property
-    def success_rate(self):
-        if not self.successes:
-            return 0.0
-        return sum(self.successes) / len(self.successes)
+    def worst(self):
+        """The mean ESR of the start doing worst, or None if unjudgeable."""
+        stats = self.per_start()
+        judged = [m for _s, (n, m) in stats.items() if n >= self.min_per_start]
+        return max(judged) if judged else None
+
+    def ready(self):
+        """Is there enough in the window to judge every scorable start?"""
+        wanted = {s for s, o in self.optimal.items() if o}
+        if not wanted:
+            return False
+        stats = self.per_start()
+        return all(stats.get(s, (0, 0))[0] >= self.min_per_start
+                   for s in wanted)
+
+    # -------------------------------------------------------------- hook
 
     def _on_step(self):
         for info in self.locals.get('infos', []) or []:
-            # Monitor attaches this on the step an episode ends, and copies
-            # the requested info_keywords into it.
             ep = info.get('episode')
             if ep is None:
                 continue
             self.episodes += 1
-            self.successes.append(float(ep.get('is_success', 0.0)))
 
-            if (self.episodes >= max(self.window, self.min_episodes)
-                    and len(self.successes) == self.window
-                    and self.success_rate >= self.threshold
-                    and self.episodes >= self.min_episodes_next):
-                rate = self.success_rate
+            start = info.get('start_index')
+            opt = self.optimal.get(int(start)) if start is not None else None
+            # A timeout has already run the full cap, so ep['l'] IS the cap
+            # and no special case is needed to charge it: the penalty is
+            # built into the length of a failed episode.
+            esr = extra_step_ratio(ep.get('l', 0), opt)
+            if esr is None:
+                self.unscored += 1
+            else:
+                self.scored += 1
+                self.recent.append((int(start), esr))
+
+            if (len(self.recent) == self.window
+                    and self.episodes >= self.min_episodes_next
+                    and self.ready()
+                    and self.worst is not None
+                    and self.worst < self.threshold):
                 self.stop_reason = 'converged'
                 self.stop_episode = self.episodes
                 if self.verbose:
-                    print(f'\n[stop] converged: {rate:.0%} success after '
-                          f'{self.episodes} episodes / {self.num_timesteps} '
-                          f'steps', flush=True)
+                    print(f'\n[stop] every start under {self.threshold:g} '
+                          f'extra steps per optimal step, worst '
+                          f'{self.worst:.2f}, after {self.episodes} episodes '
+                          f'/ {self.num_timesteps} steps', flush=True)
+                    self.report()
                 return False
 
-            # Checked on a full window only: a partial window early in a
-            # stretch can read far below the true rate.
-            if (self.give_up_below is not None
-                    and self.give_up_after_steps
-                    and self.num_timesteps >= self.give_up_after_steps
-                    and len(self.successes) == self.window
-                    and self.success_rate < self.give_up_below):
-                self.stop_reason = 'gave_up_no_progress'
+            if self.episodes >= self.max_episodes:
+                self.stop_reason = 'episode_budget_exhausted'
                 self.stop_episode = self.episodes
                 if self.verbose:
-                    print(f'\n[stop] no progress: {self.success_rate:.0%} '
-                          f'success over the last {self.window} episodes at '
-                          f'{self.num_timesteps} steps, below the '
-                          f'{self.give_up_below:.0%} floor. Abandoning.',
-                          flush=True)
-                return False
-
-            if self.max_episodes and self.episodes >= self.max_episodes:
-                self.stop_reason = 'gave_up'
-                self.stop_episode = self.episodes
-                if self.verbose:
-                    print(f'\n[stop] no convergence after {self.episodes} '
-                          f'episodes: {self.success_rate:.0%} success over the '
-                          f'last {len(self.successes)}', flush=True)
+                    w = self.worst
+                    print(f'\n[stop] {self.episodes} episodes used. Worst '
+                          f'start averages '
+                          f'{"n/a" if w is None else f"{w:.2f}"} extra steps '
+                          f'per optimal step, against a {self.threshold:g} '
+                          f'bar.', flush=True)
+                    self.report()
                 return False
         return True
 
+    def report(self):
+        for s, (n, mean) in sorted(self.per_start().items()):
+            mark = '' if n >= self.min_per_start else '   (too few to judge)'
+            print(f'    start {s}: mean ESR {mean:+.2f} over {n} episodes'
+                  f'{mark}', flush=True)
+
     def summary(self):
+        stats = {str(s): dict(episodes=n, mean_esr=round(m, 4))
+                 for s, (n, m) in sorted(self.per_start().items())}
         return dict(
-            stop_reason=self.stop_reason or 'budget_exhausted',
+            stop_reason=self.stop_reason or 'step_ceiling_reached',
             episodes=self.episodes,
-            final_success_rate=self.success_rate,
+            scored_episodes=self.scored,
+            unscored_episodes=self.unscored,
             window=self.window,
             threshold=self.threshold,
-            give_up_below=self.give_up_below,
-            give_up_after_steps=self.give_up_after_steps,
+            min_per_start=self.min_per_start,
+            max_episodes=self.max_episodes,
+            worst_mean_esr=self.worst,
+            per_start=stats,
+            optimal_steps={str(k): v for k, v in self.optimal.items()},
             # Every time training looked converged and the caller checked
             # the greedy policy. A long list means the policy kept
             # oscillating, which is worth knowing when reading the curve.

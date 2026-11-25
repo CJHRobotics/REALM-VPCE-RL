@@ -49,9 +49,15 @@ action rays, as far from one as a start can be.
 """
 
 import os
+import sys
 from collections import deque
 
 import numpy as np
+
+sys.path.insert(0, os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 '..', '..', '..', '..')))
+from realm_tools.rl_lib import optimal_paths as OP          # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -428,99 +434,25 @@ def write_positions(segs, path):
 
 
 # --------------------------------------------------------------------- A*
-
-# The agent's action set, as MyRobot defines it: action k moves one action
-# length along WORLD bearing 45k. Allocentric, so the bearings do not depend
-# on which way the robot faces.
-ACTION_LENGTH  = 0.5
-N_ACTIONS      = 8
-ACTION_BEARING = np.arange(N_ACTIONS) * (2 * np.pi / N_ACTIONS)
-# get_possible_actions refuses an action unless the whole 45-degree sector
-# ahead of it is clear to action_length + 0.25.
-MASK_RANGE     = ACTION_LENGTH + 0.25
-KEY_RES        = 0.05       # two positions this close are one search node
-# The robot is a body, not a point, and the action mask does not know that.
-# It models the lidar, which refuses a direction on what lies AHEAD in a
-# 45-degree sector; it says nothing about the wall the robot is sliding past
-# on its flank. The hambot's bounding box is 0.2 x 0.171 x 0.15 m, so its
-# circumscribed radius is 0.132 m -- a 0.2 m buffer between the centre and
-# any surface leaves about 0.07 m of real air. Every move is checked along
-# its whole swept path, not just at its endpoints, because a 0.5 m step can
-# pass a segment end that neither endpoint is close to.
-ROBOT_BUFFER   = 0.2
-SWEEP_STEP     = 0.025      # how finely a move is sampled for that check
-
-
-def blocked_field(segs):
-    """blocked[k, i, j]: action k refused by the lidar mask at that cell.
-
-    This reimplements get_possible_actions rather than testing clearance,
-    because the two differ in a way that changes the answer. The mask is a
-    SECTOR test: action k is refused when anything lies within 0.75 m inside
-    the 45-degree wedge centred on bearing 45k. So a robot 0.3 m from an
-    obstacle still moves freely in six directions, which a clearance test
-    would call blocked outright. Searching over clearance would find routes
-    the agent cannot take and miss routes it can.
-    """
-    n = int(np.ceil(2 * RADIUS / RES)) + 1
-    xs = np.linspace(-RADIUS, RADIUS, n)
-    ys = np.linspace(-RADIUS, RADIUS, n)
-    blocked = np.zeros((N_ACTIONS, n, n), dtype=bool)
-
-    # Everything the lidar would return a range for. Obstacle samples sit on
-    # the centre line but the beam stops at the surface, so they reach half a
-    # thickness further than the perimeter's samples, which are already on
-    # its inner face.
-    obs = []
-    for sg in segs:
-        length = float(np.hypot(sg[2] - sg[0], sg[3] - sg[1]))
-        t = np.linspace(0.0, 1.0, max(2, int(length / 0.02)))
-        obs.append(np.stack([sg[0] + t * (sg[2] - sg[0]),
-                             sg[1] + t * (sg[3] - sg[1])], axis=1))
-    wt = np.linspace(0.0, 2 * np.pi, int(2 * np.pi * RADIUS / 0.02),
-                     endpoint=False)
-    groups = [(np.concatenate(obs), MASK_RANGE + OBS_HALF),
-              (np.stack([RADIUS * np.cos(wt), RADIUS * np.sin(wt)], axis=1),
-               MASK_RANGE)]
-
-    for pts, reach in groups:
-        half = int(np.ceil(reach / RES))
-        for px, py in pts:
-            ci = int(round((px + RADIUS) / RES))
-            cj = int(round((py + RADIUS) / RES))
-            i0, i1 = max(0, ci - half), min(n, ci + half + 1)
-            j0, j1 = max(0, cj - half), min(n, cj + half + 1)
-            if i0 >= i1 or j0 >= j1:
-                continue
-            dx = px - xs[i0:i1][:, None]
-            dy = py - ys[j0:j1][None, :]
-            within = (dx * dx + dy * dy) <= reach ** 2
-            if not within.any():
-                continue
-            # Which 45-degree bin it falls in, seen from the cell.
-            k = np.rint(np.arctan2(dy, dx) / (2 * np.pi / N_ACTIONS))
-            k = (k.astype(int) % N_ACTIONS) * np.ones_like(within, dtype=int)
-            for a in range(N_ACTIONS):
-                sel = within & (k == a)
-                if sel.any():
-                    blocked[a, i0:i1, j0:j1] |= sel
-    return blocked, xs, ys
-
-
-def move_clear(x, y, nx, ny, segs):
-    """Does the robot's centre keep ROBOT_BUFFER along the whole move?"""
-    n = max(2, int(np.ceil(ACTION_LENGTH / SWEEP_STEP)) + 1)
-    t = np.linspace(0.0, 1.0, n)
-    px = x + t * (nx - x)
-    py = y + t * (ny - y)
-    if np.hypot(px, py).max() > RADIUS - ROBOT_BUFFER:
-        return False
-    return bool(point_seg_dist(px, py, segs).min()
-                >= ROBOT_BUFFER + OBS_HALF)
+#
+# The search itself lives in realm_tools/rl_lib/optimal_paths.py, because
+# the training job needs the same numbers: the extra-step ratio it stops on
+# is measured against exactly this optimum, over exactly this action set.
+# Two copies would drift, and the drift would be invisible -- a generator
+# that accepts a layout on one A* while the stopper judges the policy on
+# another produces a threshold that means nothing.
+#
+# The constants below are re-exported so this file still reads as the
+# record of what the arena was built under.
+ACTION_LENGTH  = OP.ACTION_LENGTH
+N_ACTIONS      = OP.N_ACTIONS
+MASK_RANGE     = OP.MASK_RANGE
+ROBOT_BUFFER   = OP.ROBOT_BUFFER
+SWEEP_STEP     = OP.SWEEP_STEP
 
 
 def route_clearance(path, segs):
-    """Smallest distance from the robot's centre to anything, along a route."""
+    """Smallest distance from the robot's centre to a surface, on a route."""
     worst = np.inf
     for a, b in zip(path, path[1:]):
         n = max(2, int(np.ceil(ACTION_LENGTH / SWEEP_STEP)) + 1)
@@ -533,71 +465,16 @@ def route_clearance(path, segs):
     return worst
 
 
-def astar(start, blocked, segs, goal=GOAL, cap=400_000):
-    """Fewest of the agent's own actions from start to the goal.
+def straight_blocked(x, y, segs):
+    """Does the straight line from (x, y) to the goal pass an obstacle?"""
+    t = np.linspace(0.0, 1.0, 400)
+    px = x + t * (GOAL[0] - x)
+    py = y + t * (GOAL[1] - y)
+    return bool(point_seg_dist(px, py, segs).min() < CLEAR + OBS_HALF)
 
-    Nodes are exact positions, reached by summing whole actions, so every
-    point on the returned path is one the agent could actually stand on.
-    Only the visited set is discretised, at KEY_RES: the 8 action bearings
-    generate a set that is dense in the plane, so without that the search
-    would never close. Two positions within 5 cm are treated as the same
-    state, which can cost a step of optimality and cannot produce a route
-    the agent could not walk.
 
-    Returns the list of positions, or None if the goal is unreachable.
-    """
-    import heapq
-    n = blocked.shape[1]
-
-    def ij(x, y):
-        return (min(max(int(round((x + RADIUS) / RES)), 0), n - 1),
-                min(max(int(round((y + RADIUS) / RES)), 0), n - 1))
-
-    def key(x, y):
-        return (int(round(x / KEY_RES)), int(round(y / KEY_RES)))
-
-    def h(x, y):
-        return max(0.0, float(np.hypot(x - goal[0], y - goal[1])) - GOAL_R)
-
-    sx, sy = float(start[0]), float(start[1])
-    k0 = key(sx, sy)
-    pos = {k0: (sx, sy)}
-    came = {k0: None}
-    best = {k0: 0.0}
-    pq = [(h(sx, sy), 0.0, k0)]
-    seen = 0
-    while pq:
-        _f, g, k = heapq.heappop(pq)
-        if g > best.get(k, np.inf):
-            continue
-        x, y = pos[k]
-        if np.hypot(x - goal[0], y - goal[1]) < GOAL_R:
-            out = []
-            while k is not None:
-                out.append(pos[k])
-                k = came[k]
-            return out[::-1]
-        seen += 1
-        if seen > cap:
-            return None
-        i, j = ij(x, y)
-        for a in range(N_ACTIONS):
-            if blocked[a, i, j]:
-                continue
-            nx = x + ACTION_LENGTH * np.cos(ACTION_BEARING[a])
-            ny = y + ACTION_LENGTH * np.sin(ACTION_BEARING[a])
-            # The mask has already cleared the sector ahead; this is the
-            # robot's own width, which the mask does not account for.
-            if not move_clear(x, y, nx, ny, segs):
-                continue
-            nk = key(nx, ny)
-            ng = g + ACTION_LENGTH
-            if ng < best.get(nk, np.inf) - 1e-9:
-                best[nk] = ng
-                pos[nk] = (float(nx), float(ny))
-                came[nk] = k
-                heapq.heappush(pq, (ng + h(nx, ny), ng, nk))
-    return None
+def cell(xs, ys, x, y):
+    return int(np.argmin(np.abs(xs - x))), int(np.argmin(np.abs(ys - y)))
 
 
 def _draw_arena(ax, segs, start_xy, faint=False):
@@ -691,8 +568,9 @@ def main():
         # on a whole 45-degree sector, so a passage wide enough to stand in
         # is not always one the agent will enter. A layout that survives the
         # fill but not the search is rejected like any other.
-        blocked, _bxs, _bys = blocked_field(segs)
-        paths = [astar(p[:2], blocked, segs) for p in start_xy]
+        blocked, _bxs, _bys = OP.blocked_field(segs, OBS_HALF, RADIUS)
+        paths = [OP.astar(p[:2], blocked, segs, OBS_HALF, RADIUS,
+                          GOAL, GOAL_R) for p in start_xy]
         if all(p is not None for p in paths):
             break
         print(f'  attempt {attempt}: flood fill passed but A* found no route '
