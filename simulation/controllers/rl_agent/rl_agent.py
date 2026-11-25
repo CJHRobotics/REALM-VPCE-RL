@@ -25,7 +25,7 @@ without editing anything. They are read once, at the top, and echoed:
     REALM_RUN_TAG     names the output directory     (derived)
     REALM_EVAL_ONLY   1 to load the saved model and only evaluate
     REALM_MAX_EPISODES episodes the agent gets                (1000)
-    REALM_ESR_THRESHOLD mean extra-step ratio to stop under    (1.5)
+    REALM_ESR_THRESHOLD mean extra-step ratio to stop under    (1.0)
     REALM_ESR_WINDOW   trailing episodes the means run over    (100)
     REALM_MIN_PER_START episodes a start needs to be judged    (10)
     REALM_DEVICE      cpu or cuda for the network             (cpu)
@@ -114,7 +114,7 @@ SHAPING = float(os.environ.get('REALM_SHAPING', 0.0))
 SEED = int(os.environ.get('REALM_SEED', 0))
 EVAL_ONLY = os.environ.get('REALM_EVAL_ONLY', '0') == '1'
 MAX_EPISODES = int(os.environ.get('REALM_MAX_EPISODES', 1000))
-ESR_THRESHOLD = float(os.environ.get('REALM_ESR_THRESHOLD', 1.5))
+ESR_THRESHOLD = float(os.environ.get('REALM_ESR_THRESHOLD', 1.0))
 ESR_WINDOW = int(os.environ.get('REALM_ESR_WINDOW', 100))
 MIN_PER_START = int(os.environ.get('REALM_MIN_PER_START', 10))
 TAG = os.environ.get(

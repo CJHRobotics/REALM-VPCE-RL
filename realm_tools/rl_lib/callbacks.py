@@ -86,8 +86,9 @@ class ExtraStepStopper(BaseCallback):
         start mapped to None or missing is skipped: it cannot be scored, and
         scoring it against a guess would be worse than not scoring it.
     threshold : float
-        Mean extra-step ratio a start must be under. 1.5 means routes
-        averaging two and a half times the optimum.
+        Mean extra-step ratio a start must be under. 1.0 means routes
+        averaging twice the optimum: one extra action for every action
+        the task needs.
     window : int
         Trailing episodes the means are taken over, across all starts.
     min_per_start : int
@@ -100,7 +101,7 @@ class ExtraStepStopper(BaseCallback):
         budget effectively does.
     """
 
-    def __init__(self, optimal, threshold=1.5, window=100, min_per_start=10,
+    def __init__(self, optimal, threshold=1.0, window=100, min_per_start=10,
                  max_episodes=1000, verbose=1):
         super().__init__(verbose)
         self.optimal = {int(k): v for k, v in (optimal or {}).items()}

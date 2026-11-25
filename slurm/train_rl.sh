@@ -28,7 +28,8 @@
 #
 # Training stops as CONVERGED when, over the last REALM_ESR_WINDOW episodes
 # (100), every start has at least REALM_MIN_PER_START episodes (10) and
-# every start's MEAN ESR is below REALM_ESR_THRESHOLD (1.5). Per start, not
+# every start's MEAN ESR is below REALM_ESR_THRESHOLD (1.0) -- routes
+# averaging at most twice the optimum. Per start, not
 # pooled: a pooled mean is exactly the statistic that lets three good starts
 # carry a bad one, which is the failure this rule was written for -- a run
 # declared converged with one start taking 148 actions against an optimum
@@ -206,7 +207,7 @@ echo "Arena   : $ARENA"
 echo "Ensemble: $ENSEMBLE"
 echo "Run tag : $TAG   ->  $OUT_DIR"
 echo "Algo    : ${REALM_ALGO:-DQN}   seed=${REALM_SEED:-0}"
-echo "Stop at : every start under ${REALM_ESR_THRESHOLD:-1.5} extra steps per optimal step,"
+echo "Stop at : every start under ${REALM_ESR_THRESHOLD:-1.0} extra steps per optimal step,"
 echo "          averaged over the last ${REALM_ESR_WINDOW:-100} episodes"
 echo "Budget  : ${REALM_MAX_EPISODES:-1000} episodes   (${REALM_TIMESTEPS:-250000} steps as a backstop)"
 echo "Teleport: ${REALM_TELEPORT:-1}   shaping=${REALM_SHAPING:-0}"
@@ -264,7 +265,7 @@ timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
     --env REALM_SEED="${REALM_SEED:-0}" \
     --env REALM_EVAL_ONLY="${REALM_EVAL_ONLY:-0}" \
     --env REALM_MAX_EPISODES="${REALM_MAX_EPISODES:-1000}" \
-    --env REALM_ESR_THRESHOLD="${REALM_ESR_THRESHOLD:-1.5}" \
+    --env REALM_ESR_THRESHOLD="${REALM_ESR_THRESHOLD:-1.0}" \
     --env REALM_ESR_WINDOW="${REALM_ESR_WINDOW:-100}" \
     --env REALM_MIN_PER_START="${REALM_MIN_PER_START:-10}" \
     --env REALM_DEVICE="${REALM_DEVICE:-cpu}" \

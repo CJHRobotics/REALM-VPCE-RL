@@ -44,7 +44,7 @@ class Harness(ExtraStepStopper):
 
 
 def make(**kw):
-    kw.setdefault('threshold', 1.5)
+    kw.setdefault('threshold', 1.0)
     kw.setdefault('window', 100)
     kw.setdefault('min_per_start', 10)
     kw.setdefault('max_episodes', 1000)
@@ -75,7 +75,7 @@ def test_one_bad_start_blocks_convergence():
 def test_it_converges_when_every_start_is_good():
     st = make()
     assert st.run({0: 20, 1: 14, 2: 20, 3: 12}) == 'converged'
-    assert st.worst < 1.5
+    assert st.worst < 1.0
     return f'converged at episode {st.stop_episode}, worst {st.worst:.2f}'
 
 
