@@ -142,45 +142,117 @@ def main():
     axA.set_xticks([]); axA.set_yticks([])
 
     # ---------------------------------------------------------------- B
-    order = np.argsort(-obs)
-    rank_of = np.empty_like(order)
-    rank_of[order] = np.arange(len(order))
-    axB.plot(np.arange(1, len(obs) + 1), obs[order], color='0.6', lw=1.2,
-             label=f'all {len(obs)} place cells')
-    axB.scatter(rank_of[idx] + 1, obs[idx], s=26, color='crimson', zorder=5,
-                label=f'the {len(idx)} the action needs')
-    axB.set_yscale('log')
-    axB.set_xlabel('place cell, ranked by activation at this state')
-    axB.set_ylabel('activation (share of the population code)')
-    lo, hi = int(rank_of[idx].min()) + 1, int(rank_of[idx].max()) + 1
-    axB.set_title('B   what it saw, and which of it mattered\n'
-                  f'the set is drawn from the active tail (ranks {lo}-{hi}) '
-                  f'but is not simply the top {len(idx)}', fontsize=10)
-    axB.legend(fontsize=8.5, loc='upper right')
-    axB.grid(alpha=0.25, lw=0.6)
+    # Importance over SPACE, as a field rather than a pile of ellipses.
+    #
+    # Two things forced this. The optimiser's deletion weights are nearly
+    # all saturated at ~0.995 -- it drives the chosen cells to one and
+    # leaves the rest at zero, which makes it a selector and not a ranking,
+    # so shading by it coloured noise. And drawing 62 fitted ellipses puts a
+    # 6 m scale-5 blob on top of everything else: the largest fields own the
+    # ink regardless of what they contributed.
+    #
+    # So importance here is measured, one cell at a time: how far the
+    # policy's probability of its chosen action falls when that cell alone
+    # is deleted. 62 forward passes, and it means something a caption can
+    # state. Each cell then contributes its own fitted Gaussian, weighted by
+    # that drop, and the sum is the map -- so a large field spreads its
+    # contribution over the area it actually covers instead of hiding the
+    # small ones underneath it.
+    with torch.no_grad():
+        p0 = float(torch.softmax(action_logits(model.policy, x), -1)[0, int(st['action'])])
+    solo = []
+    for cell in idx:
+        d = torch.zeros_like(x)
+        d[0, int(cell)] = 1.0
+        with torch.no_grad():
+            solo.append(p0 - float(torch.softmax(
+                action_logits(model.policy, perturb(x, d, ref)),
+                -1)[0, int(st['action'])]))
+    solo = np.asarray(solo)
+
+    R = env['env_R']
+    gx = np.linspace(-R, R, 260)
+    GX, GY = np.meshgrid(gx, gx)
+    heat = np.zeros_like(GX)
+    for (_, r), wi in zip(bank.iloc[idx].iterrows(), solo):
+        if wi <= 0:
+            continue                      # deleting it HELPED; not support
+        th = float(r['orientation_rad'])
+        dx, dy = GX - r['centroid_x'], GY - r['centroid_y']
+        u = dx * np.cos(th) + dy * np.sin(th)
+        v = -dx * np.sin(th) + dy * np.cos(th)
+        a = max(float(r['semi_major_m']), 0.15)
+        b = max(float(r['semi_minor_m']), 0.15)
+        heat += wi * np.exp(-0.5 * ((u / a) ** 2 + (v / b) ** 2))
+    heat[GX ** 2 + GY ** 2 > R ** 2] = np.nan
+
+    im = axB.imshow(heat, origin='lower', extent=[-R, R, -R, R],
+                    cmap='magma_r', interpolation='bilinear', zorder=1)
+    draw_env(axB, env, xml_root)
+    axB.add_patch(plt.Circle((0, 0), 0.8, facecolor='none', edgecolor='gold',
+                             lw=2.0, zorder=6))
+    axB.plot(st['robot_x'], st['robot_y'], 'o', ms=11, color='limegreen',
+             mec='black', mew=1.2, zorder=11)
+    cb = fig.colorbar(im, ax=axB, fraction=0.046, pad=0.02)
+    cb.set_label('drop in P(action) if that cell alone is removed',
+                 fontsize=8)
+    cb.ax.tick_params(labelsize=7.5)
+    axB.set_title(f'B   where the decision came from\n'
+                  f'{len(idx)} cells of the {int((obs > obs.max() * 0.02).sum())} '
+                  f'active here, each weighted by what it alone contributes',
+                  fontsize=10)
+    axB.set_xticks([]); axB.set_yticks([])
 
     # ---------------------------------------------------------------- C
-    w = 0.38
-    pos = np.arange(8)
-    axC.bar(pos - w / 2, p_before, w, color='0.45', label='as observed')
-    axC.bar(pos + w / 2, p_after, w, color='crimson', alpha=0.85,
-            label=f'with those {len(idx)} cells deleted')
-    axC.set_xticks(pos); axC.set_xticklabels(BEARING)
-    axC.set_xlabel('action (world bearing)')
-    axC.set_ylabel('policy probability')
-    axC.axvline(int(st['action']), color='0.45', ls=':', lw=1.2)
-    axC.axvline(int(st['flipped_to']), color='crimson', ls=':', lw=1.2)
-    a0, a1 = int(st['action']), int(st['flipped_to'])
-    axC.annotate(f'margin before {p_before[a0] - p_before[a1]:+.3f}\n'
-                 f'margin after  {p_after[a0] - p_after[a1]:+.3f}',
-                 xy=(0.98, 0.72), xycoords='axes fraction', ha='right',
-                 fontsize=8.5, family='monospace',
-                 bbox=dict(fc='white', ec='0.7', lw=0.6, pad=0.4))
-    axC.set_title(f'C   the set is verified, not thresholded\n'
-                  f'{BEARING[a0]} -> {BEARING[a1]} when they are replaced '
-                  f'by the uniform code', fontsize=10)
-    axC.legend(fontsize=8.5)
-    axC.grid(axis='y', alpha=0.25, lw=0.6)
+    # The question this answers: is the ORDER meaningful, or would deleting
+    # any 62 cells do? Delete the ranked cells one at a time and watch the
+    # chosen action's probability fall; delete the same number at random and
+    # watch it not. Bars over eight actions were here before and nobody
+    # could tell what they were for, which is fair -- they showed the end
+    # state and not the thing being claimed.
+    ks = np.unique(np.clip(
+        np.r_[0, np.round(np.geomspace(1, max(len(idx) * 4, 8), 24))],
+        0, len(obs)).astype(int))
+    a0 = int(st['action'])
+
+    def p_after_deleting(cols):
+        d = torch.zeros_like(x)
+        d[0, list(cols)] = 1.0
+        with torch.no_grad():
+            return float(torch.softmax(
+                action_logits(model.policy, perturb(x, d, ref)), -1)[0, a0])
+
+    full_order = np.argsort(-np.asarray(
+        [chosen.set_index('cell_index')['deletion_weight'].get(i, 0.0)
+         for i in range(len(obs))]))
+    ranked = [p_after_deleting(full_order[:k]) for k in ks]
+
+    rng = np.random.default_rng(0)
+    draws = np.array([[p_after_deleting(rng.choice(len(obs), k, replace=False))
+                       for k in ks] for _ in range(20)])
+
+    axC.plot(ks, ranked, '-o', ms=3.5, color='crimson', lw=1.8,
+             label='deleted in importance order', zorder=5)
+    axC.plot(ks, draws.mean(0), '-', color='0.45', lw=1.6,
+             label='the same number, chosen at random')
+    axC.fill_between(ks, np.percentile(draws, 5, axis=0),
+                     np.percentile(draws, 95, axis=0), color='0.45',
+                     alpha=0.18, lw=0, label='5-95% over 20 random draws')
+    axC.axvline(len(idx), color='crimson', ls=':', lw=1.2)
+    axC.annotate(f'{len(idx)} cells:\nthe action changes',
+                 xy=(len(idx), ranked[int(np.searchsorted(ks, len(idx)))
+                                      if len(idx) in ks else -1]),
+                 xytext=(len(idx) * 1.5, max(ranked) * 0.92), fontsize=8.5,
+                 arrowprops=dict(arrowstyle='->', color='crimson', lw=1.0))
+    axC.set_xscale('log')
+    axC.set_xlim(1, ks.max())
+    axC.set_xlabel('place cells deleted')
+    axC.set_ylabel(f'policy probability of {BEARING[a0]}')
+    axC.set_title('C   the ordering is doing the work\n'
+                  'removing these cells collapses the choice; removing as '
+                  'many at random does not', fontsize=10)
+    axC.legend(fontsize=8.5, loc='lower left')
+    axC.grid(alpha=0.25, lw=0.6)
 
     # ---------------------------------------------------------------- D
     draw_env(axD, env, xml_root)
