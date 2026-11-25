@@ -226,13 +226,38 @@ nothing:
   `GALLIUM_DRIVER=llvmpipe`, which are pinned at build time and would
   otherwise keep GL in software however many GPUs were bound.
 
-`slurm/_webots_env.sh` does both under `USE_GPU=1`, and `gl_info` aborts the
-job if the renderer still comes back as llvmpipe — a silent fallback turns a
-12-minute arena into as much as ten hours and looks like nothing but a slow
-run.
+`slurm/_webots_env.sh` does both under `USE_GPU=1`.
 
 VirtualGL is therefore not needed. Keep the note only as the record of a
 prediction that empirical measurement overturned.
+
+### And this correction was itself wrong, 2026-11-25
+
+`USE_GPU` now defaults to **0**, and the renderer probe is deleted. On this
+cluster, today, `--nv` plus those overrides makes Webots die in one second
+with `FATAL: Webots could not initialize the rendering system` — job 637598
+on GPU4. The original reasoning in `gpu_args()`, that Xvfb serves no NVIDIA
+GLX extension so the vendor dispatch lands back on Mesa or errors, is what
+actually happens here.
+
+The 75x table above stays as the record of a measurement, but nothing in
+this repo reproduces it now, and **no run that ever produced data used it**.
+Every working run — the collections, the fitted ensembles, the trained
+policies — rendered in software, and reached that state through a probe
+that failed and cleared `GPU_ARGS` on its way out. The training run of
+2026-11-24 measures 11.4 ms per render against the 2.1 ms claimed above:
+llvmpipe on a fast node, not hardware GL.
+
+Software rendering is now chosen rather than fallen into — 103 ms per
+environment step, 96 minutes for a full training run — which is a cost
+worth paying for a configuration that starts every time.
+
+The lesson this file keeps having to learn is about where a claim comes
+from. "`--nv` changes nothing" was a prediction, and was treated as fact
+until a measurement contradicted it. The 75x was a measurement, and was
+treated as a property of the cluster until it stopped reproducing. Both
+deserved a date and a job number attached, which is why this section has
+them.
 
 ### What the software-rendering path taught us anyway
 
