@@ -127,6 +127,57 @@ write_runtime_ini() {
 # 75x faster on these cards, measured. See container/README.md. Webots
 # reports the renderer it ended up with in the job log, which is the only
 # place the question has ever been answered reliably.
+# --- which renderer the job asks for -------------------------------------
+#
+#   REALM_RENDER=software   (default) Mesa llvmpipe inside the image. No GPU
+#                           is bound. This is what every dataset in this repo
+#                           was collected with, and it starts every time.
+#
+#   REALM_RENDER=vgl        VirtualGL with the EGL back end, on the GPU.
+#                           Binds --nv, overrides the image's software-GL
+#                           pins, and wraps Webots in `vglrun -d egl0`.
+#
+# Changing this changes the IMAGES, and therefore the descriptors and the
+# place fields built from them. A dataset collected under one renderer is
+# not comparable with one collected under the other -- the same rule
+# container/README.md states for moving collection between machines. Switch
+# deliberately, between experiments, and re-collect.
+#
+# Sets USE_GPU, calls gpu_args, and leaves the wrapper in VGL for the job
+# script to put in front of webots.
+render_mode() {
+    VGL=()
+    case "${REALM_RENDER:-software}" in
+        software)
+            USE_GPU=0
+            gpu_args
+            ;;
+        vgl)
+            USE_GPU=1
+            gpu_args
+            VGL=(vglrun -d "${VGL_DEVICE:-egl0}")
+            # GLVND finds its EGL vendors through JSON files in /usr/share,
+            # which --nv does not bind -- it handles libraries, not this.
+            # Without the host's 10_nvidia.json, libEGL enumerates no NVIDIA
+            # device and vglrun falls back or fails, which would look like a
+            # VirtualGL problem and would not be one.
+            if [[ -d /usr/share/glvnd/egl_vendor.d ]]; then
+                GPU_ARGS+=(--bind /usr/share/glvnd/egl_vendor.d)
+            else
+                echo "WARNING: no /usr/share/glvnd/egl_vendor.d on this host;" >&2
+                echo "         EGL may not find the NVIDIA driver inside the image." >&2
+            fi
+            ;;
+        *)
+            echo "ERROR: REALM_RENDER must be 'software' or 'vgl', not " \
+                 "'${REALM_RENDER}'" >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+
 gpu_args() {
     GPU_ARGS=()
     [[ "${USE_GPU:-0}" == "1" ]] || return 0

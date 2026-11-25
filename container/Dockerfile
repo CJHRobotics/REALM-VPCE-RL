@@ -46,6 +46,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Qt warns and falls back when the locale is plain "C"; set a UTF-8 one so
 # the logs stay clean and string handling is predictable.
+# VirtualGL, for the headless-with-a-GPU path.
+#
+# xvfb-run alone cannot reach the GPU: Xvfb is a software X server with no
+# NVIDIA GLX extension, so Webots renders through Mesa's llvmpipe at about
+# 11 ms a frame against 2 ms on hardware. Every dataset in this repo was
+# collected that way.
+#
+# The usual fix is an Xorg server bound to the GPU's BusID, which needs root
+# on the node and is therefore out on a cluster. VirtualGL 2.6 and later can
+# instead use EGL directly as its rendering back end -- `vglrun -d egl0` --
+# and needs no X server for the 3D side at all. Xvfb still supplies the 2D
+# display Qt insists on; VirtualGL interposes the GLX calls Webots makes and
+# renders them on the GPU through EGL.
+#
+# That works here because the compute nodes carry libEGL_nvidia, which
+# `singularity --nv` binds. See container/README.md, "Reference".
+#
+# Installed unconditionally and used only when REALM_RENDER=vgl asks for it,
+# so this image still runs the software path exactly as before.
+ARG VGL_VERSION=3.1.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libegl1 libgles2 libxtst6 libxv1 \
+    && wget -q "https://github.com/VirtualGL/virtualgl/releases/download/${VGL_VERSION}/virtualgl_${VGL_VERSION}_amd64.deb" \
+        -O /tmp/virtualgl.deb \
+    && dpkg -i /tmp/virtualgl.deb \
+    && rm -f /tmp/virtualgl.deb \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 

@@ -231,6 +231,51 @@ nothing:
 VirtualGL is therefore not needed. Keep the note only as the record of a
 prediction that empirical measurement overturned.
 
+### The GPU path that should work, and how to try it
+
+Added 2026-11-25, untested on the cluster at the time of writing.
+
+`xvfb-run` cannot reach the GPU: Xvfb is a software X server with no NVIDIA
+GLX extension. The usual remedy is an Xorg server bound to the card's BusID,
+which needs root on the node and is therefore out here.
+
+VirtualGL 2.6+ can use **EGL** as its rendering back end instead, so it
+needs no X server for the 3D side at all — `vglrun -d egl0`. Xvfb still
+supplies the 2D display Qt insists on. The compute nodes carry
+`libEGL_nvidia` (see Reference below), which `--nv` binds, so the pieces are
+present.
+
+The image now installs VirtualGL, and `render_mode()` in
+`slurm/_webots_env.sh` selects the path:
+
+| `REALM_RENDER` | what runs | GPU |
+|---|---|---|
+| `software` (default) | Mesa llvmpipe in the image | not bound |
+| `vgl` | `vglrun -d egl0 webots` | `--nv`, software-GL pins overridden |
+
+To try it:
+
+1. Run the **build-webots-image** workflow with tag `r2025a-vgl`. A new tag,
+   not `r2025a`, so the place-field repo keeps pulling the image its
+   datasets were made with.
+2. `singularity pull webots_r2025a_vgl.sif docker://ghcr.io/cjhrobotics/realm-webots:r2025a-vgl`
+3. `WEBOTS_SIF=$PWD/webots_r2025a_vgl.sif REALM_RENDER=vgl EMAIL_TO=... sbatch slurm/render_check.sh circ_lm8_r3`
+
+Read the render check's own numbers, not the absence of an error: **ms per
+capture against the software run, and pixel std beside it**. A path that
+makes capture instant by returning blank frames is not a speedup, which is
+what that job was built to catch.
+
+One gotcha already handled: GLVND finds its EGL vendors through JSON files
+in `/usr/share/glvnd/egl_vendor.d`, and `--nv` binds libraries, not those.
+`render_mode` binds the directory explicitly under `vgl`, and warns if the
+host has not got it.
+
+**Switching renderers invalidates comparisons across the switch.** Different
+rasterisation and filtering means different frames, different descriptors,
+different place fields — the same rule this file states for moving
+collection between machines. Switch between experiments, and re-collect.
+
 ### And this correction was itself wrong, 2026-11-25
 
 `USE_GPU` now defaults to **0**, and the renderer probe is deleted. On this

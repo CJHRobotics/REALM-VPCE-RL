@@ -86,31 +86,10 @@ XVFB_SCREEN="${XVFB_SCREEN:-320x240x24}"
 WEBOTS_PORT=$(( 10000 + (${SLURM_JOB_ID:-0} % 20000) ))
 XVFB_DISPLAY=$(( 100 + (${SLURM_JOB_ID:-0} % 400) ))
 
-# SOFTWARE RENDERING, DELIBERATELY. This is the configuration every working
-# run in this repo has used, including the ones that produced the datasets
-# and the trained policies -- they just reached it by accident, through a
-# renderer probe that failed and cleared GPU_ARGS on its way out.
-#
-# USE_GPU=1 adds --nv and overrides the image's LIBGL_ALWAYS_SOFTWARE and
-# GALLIUM_DRIVER pins, which points Webots at the NVIDIA GLX path. Xvfb is a
-# software X server with no NVIDIA GLX extension, so Webots cannot
-# initialise a renderer at all and dies in one second with
-#
-#     FATAL: Webots could not initialize the rendering system.
-#
-# That is job 637598 on GPU4, and it is exactly what this file's gpu_args()
-# comment predicted before anyone decided the prediction had been overturned.
-#
-# The cost is known and acceptable: 11.4 ms per render measured on the run
-# of 2026-11-24, 103 ms per environment step, 96 minutes for a full training
-# run. The 320x240 screen is part of it -- worth about 2.4x under llvmpipe
-# on the slower nodes and nothing on the fast ones, since the main 3D view
-# scales with the screen while the 224x224 camera does not.
-#
-# USE_GPU=1 is left reachable for a cluster where GLX is served properly.
-# It is not this one.
-USE_GPU="${USE_GPU:-0}"
-gpu_args
+# Which renderer this job asks for. Software by default -- see
+# render_mode() in _webots_env.sh for what each one does and for
+# why switching invalidates comparisons across the change.
+render_mode || exit 1
 # Which card this job was given, for the record. This cannot fail the job
 # and cannot change a setting: it is one line in a log, not a check.
 echo "GPU     : $(nvidia-smi -L 2>/dev/null | head -1 || echo 'none reported')"
@@ -121,6 +100,9 @@ echo "Arena   : $ARENA"
 echo "Run tag : $TAG   ->  $OUT_DIR"
 echo "Mask    : l1=${REALM_MASK_L1:-3e-3} steps=${REALM_MASK_STEPS:-300} ref=${REALM_MASK_REF:-uniform}"
 echo "Motion  : drive=${REALM_DRIVE:-0}  (0 = teleport, as trained)"
+# Provenance: a dataset collected under one renderer is not comparable
+# with one collected under the other, and the log is the only record.
+echo "Render  : ${REALM_RENDER:-software}${VGL[0]:+   (${VGL[*]})}"
 echo "Webots  : extra flags [${WEBOTS_EXTRA[*]:-none}]"
 echo "Started : $(date -Is)"
 echo "Git     : $(git rev-parse --short HEAD 2>/dev/null || echo 'no git')"
@@ -152,7 +134,7 @@ timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
     --env LP_NUM_THREADS="$LP_NUM_THREADS" \
     "$SIF" \
     xvfb-run -n "$XVFB_DISPLAY" -s "-screen 0 $XVFB_SCREEN" \
-    webots --batch --stdout --stderr --mode=fast --minimize --port="$WEBOTS_PORT" \
+    "${VGL[@]+"${VGL[@]}"}" webots --batch --stdout --stderr --mode=fast --minimize --port="$WEBOTS_PORT" \
         "${WEBOTS_EXTRA[@]+"${WEBOTS_EXTRA[@]}"}" "$WORLD"
 STATUS=$?
 set -e
