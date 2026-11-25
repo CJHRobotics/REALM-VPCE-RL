@@ -44,13 +44,17 @@ tqdm
 # an older one is the next version-skew bug waiting to happen, and the
 # laptop venv was on 2.2.2 while the cluster moved to 2.5.1.
 torch==2.5.1          # +cu121, see above
-gymnasium
-# NOT pinned, and deliberately: it has to follow torch rather than lead it.
-# stable-baselines3 2.9.2 requires torch>=2.8, so pip must backtrack to a
-# release that accepts 2.5.1 -- which it will do by itself as long as torch
-# is installed first and pinned. setup/make_conda_env.sh does that in the
-# right order. Pin whatever it resolves once a run has proved it.
-stable-baselines3
+gymnasium==1.2.3      # resolved alongside SB3 2.8.0, same provenance
+# Pinned to what pip resolved against torch 2.5.1, read back out of a
+# model.zip that trained successfully on GAIVI -- so this is the version a
+# result was actually produced with, not a guess. 2.9.2 requires torch>=2.8
+# and is out of reach while torch is pinned.
+#
+# It matters off the cluster too: a model.zip written by 2.8.0 and read by
+# 2.4.1 cannot unpickle the training schedules, because FloatSchedule did
+# not exist yet. Inference survives that; anything that resumes training
+# does not.
+stable-baselines3==2.8.0
 jupyterlab
 ipykernel
 ipywidgets
