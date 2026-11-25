@@ -65,7 +65,7 @@
 # behind the named nodes for no gain here, since a 224x224 render asks
 # almost nothing of the card.
 #
-# gl_info aborts the job if GL falls back to software, rather than letting a
+# The node exclusions are the guard; there is no renderer check, after one
 # 12-minute arena silently become a ten-hour one.
 #
 # Memory: ~241k rows x 7,364 float32 features is ~7.1 GB held live, plus the
@@ -80,11 +80,11 @@ set -euo pipefail
 # Run with bash on the login node, not with sbatch: it only calls sbatch, once
 # per arena, with the flags collections have always been submitted with:
 #   --exclusive     the job gets the whole node, with no other jobs beside it
-#   STRICT_GPU=1    abort if hardware GL is unavailable, instead of falling
-#                   back to software rendering at 2.5-10 h per arena
 #   REALM_FORCE=1   recollect, OVERWRITING any dataset that already exists
-# These are fixed: --export names both variables, so a value set in the
-# calling shell does not override them. With no list it submits SUBMIT_MAZES.
+# STRICT_GPU used to be the third. It is gone with the renderer probe it
+# gated, which caused more software rendering than it ever reported.
+# REALM_FORCE is fixed here: --export names it, so a value set in the
+# calling shell does not override it. With no list it submits SUBMIT_MAZES.
 # Other sbatch options go through the environment, since sbatch reads SBATCH_*
 # itself:
 #   SBATCH_PARTITION=Quick bash slurm/collect_data.sh --submit
@@ -102,7 +102,7 @@ if [[ "${1:-}" == "--submit" ]]; then
     mkdir -p slurm/logs
     list="${2:-$SUBMIT_MAZES}"
     for maze in ${list//,/ }; do
-        sbatch --exclusive --export=ALL,STRICT_GPU=1,REALM_FORCE=1 \
+        sbatch --exclusive --export=ALL,REALM_FORCE=1 \
             --job-name="collect-$maze" slurm/collect_data.sh "$maze"
     done
     exit 0
@@ -157,7 +157,9 @@ echo "webots port: $WEBOTS_PORT   xvfb display: :$XVFB_DISPLAY"
 
 USE_GPU="${USE_GPU:-1}"
 gpu_args
-gl_info || exit 1
+# Which card this job was given, for the record. This cannot fail the job
+# and cannot change a setting: it is one line in a log, not a check.
+echo "GPU     : $(nvidia-smi -L 2>/dev/null | head -1 || echo 'none reported')"
 WORLD="$REPO_DIR/simulation/worlds/collect_data.wbt"
 
 [[ -f "$SIF"   ]] || { echo "ERROR: image not found: $SIF" >&2; exit 1; }

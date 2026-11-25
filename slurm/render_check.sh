@@ -42,8 +42,8 @@
 #
 # Any GPU except the compute-only ones, matching the collection job. A card
 # with no display engine (A100, H100, L40S) cannot provide GLX, so rendering
-# drops to llvmpipe at 15-158 ms per step against 2.1 ms. gl_info reports the
-# fallback and, under STRICT_GPU=1, aborts on it.
+# drops to llvmpipe at 15-158 ms per step against 2.1 ms. The exclusion is
+# the guard; the pixel std below is how a bad render is actually caught.
 #
 # 24 h is a guess for one arena of ~30k positions x 8 headings under software
 # rendering; the Mac took ~2 h with a real GPU. Collection is resumable --
@@ -95,7 +95,9 @@ echo "webots port: $WEBOTS_PORT   xvfb display: :$XVFB_DISPLAY"
 
 USE_GPU="${USE_GPU:-1}"
 gpu_args
-gl_info || exit 1
+# Which card this job was given, for the record. This cannot fail the job
+# and cannot change a setting: it is one line in a log, not a check.
+echo "GPU     : $(nvidia-smi -L 2>/dev/null | head -1 || echo 'none reported')"
 WORLD="$REPO_DIR/simulation/worlds/render_check.wbt"
 
 [[ -f "$SIF"   ]] || { echo "ERROR: image not found: $SIF" >&2; exit 1; }

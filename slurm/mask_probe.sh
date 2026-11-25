@@ -32,9 +32,8 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=chamilton4@usf.edu
 #
-# Same exclusions and the same STRICT_GPU default as training: this renders
-# 9 frames per step through GLX, and the compute-only cards cannot provide
-# it. A step is about 0.25 s of rendering plus 0.3 s of mask optimisation,
+# Same exclusions as training: this renders 9 frames per step through GLX,
+# and the compute-only cards cannot provide it. A step is about 0.25 s of rendering plus 0.3 s of mask optimisation,
 # so a converged four-start run is minutes. Four hours is for the case where
 # the policy wanders to the step cap.
 # --------------------------------------------------------------------------
@@ -88,9 +87,10 @@ WEBOTS_PORT=$(( 10000 + (${SLURM_JOB_ID:-0} % 20000) ))
 XVFB_DISPLAY=$(( 100 + (${SLURM_JOB_ID:-0} % 400) ))
 
 USE_GPU="${USE_GPU:-1}"
-export STRICT_GPU="${STRICT_GPU:-1}"
 gpu_args
-gl_info || exit 1
+# Which card this job was given, for the record. This cannot fail the job
+# and cannot change a setting: it is one line in a log, not a check.
+echo "GPU     : $(nvidia-smi -L 2>/dev/null | head -1 || echo 'none reported')"
 
 echo "===================================================================="
 echo "Job     : ${SLURM_JOB_ID:-local}   node $(hostname)"

@@ -80,7 +80,9 @@
 # GLX, and a card with no display engine cannot provide it -- an A100, H100
 # or L40S drops to llvmpipe at 15-158 ms per render against 2.1 ms. At eight
 # renders per environment step that is the difference between a run and a
-# timeout. gl_info aborts rather than letting it happen silently.
+# timeout. The exclusion is the whole guard now: there is no pre-flight
+# renderer check, because the one there used to be caused more software
+# rendering than it ever reported.
 #
 # Time. Per step: 8 renders, 8 HOG extractions, a teleport and the sensor
 # steps around it. Call it 50-100 ms with hardware GL, so 100k steps is
@@ -187,19 +189,10 @@ WEBOTS_PORT=$(( 10000 + (${SLURM_JOB_ID:-0} % 20000) ))
 XVFB_DISPLAY=$(( 100 + (${SLURM_JOB_ID:-0} % 400) ))
 
 USE_GPU="${USE_GPU:-1}"
-# STRICT_GPU defaults ON here, and only here. gl_info's own default is to warn
-# and fall back to software rendering, which is right for collection -- it
-# finishes, slowly -- and wrong for this job: a step is 9 renders, so llvmpipe
-# turns a 42-minute run into roughly ten days, and the job spends its whole
-# walltime producing a partial curve. Worse, the fallback is INTERMITTENT. The
-# probe runs under `xvfb-run -a` and races, so the same node returned no
-# renderer on jobs 632261 and 632489 and the 1080 Ti on 632586. A coin flip
-# between 42 minutes and ten days is not something to discover from a timing.
-# Aborting costs twenty seconds and a resubmit. Set STRICT_GPU=0 to accept the
-# software path deliberately.
-export STRICT_GPU="${STRICT_GPU:-1}"
 gpu_args
-gl_info || exit 1
+# Which card this job was given, for the record. This cannot fail the job
+# and cannot change a setting: it is one line in a log, not a check.
+echo "GPU     : $(nvidia-smi -L 2>/dev/null | head -1 || echo 'none reported')"
 
 echo "===================================================================="
 echo "Job     : ${SLURM_JOB_ID:-local}   node $(hostname)"

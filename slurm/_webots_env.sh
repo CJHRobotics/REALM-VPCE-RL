@@ -16,7 +16,7 @@
 # nothing that the preflight below does not verify directly.
 #
 # DEFINE EACH FUNCTION EXACTLY ONCE. This file carried three stacked copies of
-# write_runtime_ini, gpu_args and gl_info, newest first, because two successive
+# write_runtime_ini and gpu_args, newest first, because two successive
 # fixes were prepended instead of replacing the body they fixed. Bash keeps the
 # LAST definition, so both fixes were dead code and the original -- the one
 # they were written to correct -- was the one that actually ran, for weeks.
@@ -123,9 +123,10 @@ write_runtime_ini() {
 #      server. Xvfb is a software X server with no NVIDIA GLX extension, so
 #      the vendor dispatch is expected to land back on Mesa regardless.
 #
-# The honest expectation is therefore "no change, or a GL error". gl_info()
-# prints the renderer actually in use, which settles it in one line rather
-# than by inference from a timing.
+# That expectation turned out to be wrong -- --nv plus those overrides is
+# 75x faster on these cards, measured. See container/README.md. Webots
+# reports the renderer it ended up with in the job log, which is the only
+# place the question has ever been answered reliably.
 gpu_args() {
     GPU_ARGS=()
     [[ "${USE_GPU:-0}" == "1" ]] || return 0
@@ -136,85 +137,30 @@ gpu_args() {
     return 0
 }
 
-gl_info() {
-    # Reports the renderer actually in use and, when hardware GL was asked for
-    # but is not available, FALLS BACK to software rather than failing the job.
-    #
-    # This used to abort, on the reasoning that a silent fallback turns a
-    # 12-minute arena into as much as ten hours. That reasoning is sound and
-    # the guard was still wrong: it blocked collection entirely on a cluster
-    # where software rendering demonstrably works, twice, for a GPU path that
-    # is an optimisation rather than a requirement. A loud warning in the log
-    # and in the mailed report carries the same information without costing a
-    # day. Set STRICT_GPU=1 to abort instead.
-    local r
-    echo "--- GL renderer actually in use ---"
-    echo "  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
-    if [[ "${USE_GPU:-0}" == "1" ]]; then
-        "$SINGULARITY" exec "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" "$SIF" \
-            nvidia-smi -L 2>&1 | head -5 || echo "  (no nvidia-smi in image)"
-    fi
-
-    # THE PROBE IS RETRIED, ON DETERMINISTIC DISPLAYS. This used `xvfb-run -a`,
-    # which scans /tmp for a free display number and takes it -- and two jobs
-    # landing on one node scan at the same time, pick the same number, and one
-    # of them gets
-    #
-    #     X Error of failed request: BadValue (integer parameter out of range)
-    #
-    # from glxinfo, which looks exactly like a broken GL stack and is not. Jobs
-    # 632261 and 632489 both failed this way on GPU4 and 632586 then found a
-    # 1080 Ti on the same node minutes later; 637561 failed again. A coin flip
-    # that costs a resubmit every time it lands wrong.
-    #
-    # Two changes. The display number is derived from the job id, like Webots'
-    # own, so nothing has to scan and no two jobs can collide; the offsets keep
-    # it clear of the 100-499 range the job script hands Webots. And it is
-    # tried up to three times on different numbers, because a stale
-    # /tmp/.X<n>-lock from a killed job makes `-n` fail outright, which is the
-    # one thing `-a` was good at.
-    local probe out attempt
-    out=''
-    for attempt in 0 1 2; do
-        probe=$(( 600 + attempt * 1000 + (${SLURM_JOB_ID:-$$} % 400) ))
-        out="$("$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
-            "$SIF" xvfb-run -n "$probe" \
-            -s "-screen 0 ${XVFB_SCREEN:-1280x1024x24}" glxinfo -B 2>&1 || true)"
-        # A renderer line is an answer, even when the answer is llvmpipe:
-        # software rendering is a real finding and must not be retried away.
-        # Only the absence of one -- the shape a lost display race takes --
-        # is worth another go.
-        if echo "$out" | grep -qi 'OpenGL renderer'; then
-            break
-        fi
-        if [[ "$attempt" != 2 ]]; then
-            echo "  probe on display :$probe returned no renderer; retrying" >&2
-            sleep 2
-        fi
-    done
-    echo "$out" | grep -Ei 'vendor|renderer|version|error' | head -8 \
-        || echo "  (no glxinfo output)"
-
-    [[ "${USE_GPU:-0}" == "1" ]] || return 0
-
-    r="$(echo "$out" | grep -i 'OpenGL renderer' || true)"
-    if [[ -n "$r" && "$r" != *llvmpipe* && "$r" != *softpipe* && "$r" != *swrast* ]]; then
-        echo "  hardware GL confirmed:$r"
-        return 0
-    fi
-
-    echo "WARNING: hardware GL unavailable (${r:-glxinfo returned no renderer})." >&2
-    echo "         Falling back to software rendering: expect roughly 2.5-10 h" >&2
-    echo "         per arena instead of 0.2 h, depending on the node." >&2
-    if [[ "${STRICT_GPU:-0}" == "1" ]]; then
-        echo "         STRICT_GPU=1 set -- aborting instead." >&2
-        return 1
-    fi
-    GPU_ARGS=()
-    USE_GPU=0
-    # The small screen is worth ~2.4x under llvmpipe on the slow nodes and
-    # nothing on fast ones, so it is only applied on this path.
-    XVFB_SCREEN="320x240x24"
-    echo "         XVFB_SCREEN set to $XVFB_SCREEN for the software path." >&2
-    return 0
-}
+# gl_info() WAS HERE, AND IS GONE.
+#
+# It ran glxinfo under its own Xvfb before Webots started, to report which
+# renderer was in use and, under STRICT_GPU, to refuse the job if that
+# renderer was software. It cost four jobs and most of two days, and every
+# one of those failures was the probe, not the GL stack.
+#
+# The mechanism is worse than a false alarm. When the probe came back
+# without a renderer line -- a lost race for a display number, which is what
+# `xvfb-run -a` makes likely when two jobs start on one node -- gl_info
+# CLEARED GPU_ARGS and set XVFB_SCREEN to 320x240 before returning. So a
+# failed probe did not report software rendering, it CAUSED it: Webots was
+# then launched with no --nv at all, having been told the hardware was
+# unavailable by a test that never asked Webots anything.
+#
+# Deriving the display from the job id and retrying fixed neither the
+# BadValue nor the aborts. At that point the probe had cost more than it
+# could ever save, and the collection jobs -- which use the GPU perfectly
+# well -- had been doing so while this function was predicting they could
+# not.
+#
+# What replaces it is nothing. gpu_args() still binds --nv and overrides the
+# image's software-GL pins, Webots reports its own renderer in the job log
+# where it can be read after the fact, and the jobs that render are left to
+# find out from the thing that actually does the rendering. A pre-flight
+# guess about what Webots will do is not worth the authority to stop a job
+# from running.
