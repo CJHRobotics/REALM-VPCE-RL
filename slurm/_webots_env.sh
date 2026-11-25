@@ -147,7 +147,7 @@ gl_info() {
     # is an optimisation rather than a requirement. A loud warning in the log
     # and in the mailed report carries the same information without costing a
     # day. Set STRICT_GPU=1 to abort instead.
-    local out r
+    local r
     echo "--- GL renderer actually in use ---"
     echo "  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
     if [[ "${USE_GPU:-0}" == "1" ]]; then
@@ -155,16 +155,43 @@ gl_info() {
             nvidia-smi -L 2>&1 | head -5 || echo "  (no nvidia-smi in image)"
     fi
 
-    # One call, not two, and `-a` rather than `-n`. Two calls on the same
-    # display number is the bug this function kept regressing to: `xvfb-run -n`
-    # fails outright when the number is still held, so the second call returned
-    # nothing and the guard reported a broken GL stack on a machine whose GL
-    # was fine. `-a` probes for a free number instead, which also survives a
-    # stale /tmp/.X<n>-lock left behind by a killed job. Webots itself keeps
-    # its deterministic -n display, assigned in the job script.
-    out="$("$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
-        "$SIF" xvfb-run -a \
-        -s "-screen 0 ${XVFB_SCREEN:-1280x1024x24}" glxinfo -B 2>&1 || true)"
+    # THE PROBE IS RETRIED, ON DETERMINISTIC DISPLAYS. This used `xvfb-run -a`,
+    # which scans /tmp for a free display number and takes it -- and two jobs
+    # landing on one node scan at the same time, pick the same number, and one
+    # of them gets
+    #
+    #     X Error of failed request: BadValue (integer parameter out of range)
+    #
+    # from glxinfo, which looks exactly like a broken GL stack and is not. Jobs
+    # 632261 and 632489 both failed this way on GPU4 and 632586 then found a
+    # 1080 Ti on the same node minutes later; 637561 failed again. A coin flip
+    # that costs a resubmit every time it lands wrong.
+    #
+    # Two changes. The display number is derived from the job id, like Webots'
+    # own, so nothing has to scan and no two jobs can collide; the offsets keep
+    # it clear of the 100-499 range the job script hands Webots. And it is
+    # tried up to three times on different numbers, because a stale
+    # /tmp/.X<n>-lock from a killed job makes `-n` fail outright, which is the
+    # one thing `-a` was good at.
+    local probe out attempt
+    out=''
+    for attempt in 0 1 2; do
+        probe=$(( 600 + attempt * 1000 + (${SLURM_JOB_ID:-$$} % 400) ))
+        out="$("$SINGULARITY" exec "${BINDS[@]+"${BINDS[@]}"}" "${GPU_ARGS[@]+"${GPU_ARGS[@]}"}" \
+            "$SIF" xvfb-run -n "$probe" \
+            -s "-screen 0 ${XVFB_SCREEN:-1280x1024x24}" glxinfo -B 2>&1 || true)"
+        # A renderer line is an answer, even when the answer is llvmpipe:
+        # software rendering is a real finding and must not be retried away.
+        # Only the absence of one -- the shape a lost display race takes --
+        # is worth another go.
+        if echo "$out" | grep -qi 'OpenGL renderer'; then
+            break
+        fi
+        if [[ "$attempt" != 2 ]]; then
+            echo "  probe on display :$probe returned no renderer; retrying" >&2
+            sleep 2
+        fi
+    done
     echo "$out" | grep -Ei 'vendor|renderer|version|error' | head -8 \
         || echo "  (no glxinfo output)"
 
