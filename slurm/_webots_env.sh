@@ -133,6 +133,11 @@ write_runtime_ini() {
 #                           is bound. This is what every dataset in this repo
 #                           was collected with, and it starts every time.
 #
+#   REALM_RENDER=gpu        --nv and the GL overrides, no vglrun. What the
+#                           run of 2026-11-24 used. Dies on a node whose
+#                           Xvfb cannot serve NVIDIA GLX; costs a second to
+#                           find out, and needs no new image.
+#
 #   REALM_RENDER=vgl        VirtualGL with the EGL back end, on the GPU.
 #                           Binds --nv, overrides the image's software-GL
 #                           pins, and wraps Webots in `vglrun -d egl0`.
@@ -152,6 +157,25 @@ render_mode() {
             USE_GPU=0
             gpu_args
             ;;
+        gpu)
+            # EXACTLY the configuration the 2026-11-24 run converged under:
+            # --nv plus the overrides for the image's software-GL pins, and
+            # no vglrun. That run had USE_GPU=1 and STRICT_GPU=1, so it
+            # would have aborted had its probe reported software; it did
+            # not abort, it ran 96 minutes and converged. Deleting the
+            # probe on 2026-11-25 took this configuration away with it and
+            # left no way to ask for it back, which is why every run since
+            # has rendered in software at about 560 ms a simulated step
+            # against roughly 2 ms.
+            #
+            # It dies with "FATAL: Webots could not initialize the
+            # rendering system" on a node whose Xvfb cannot serve NVIDIA
+            # GLX -- GPU4 did, job 637598. Whether any node can is the
+            # question this mode exists to answer, and it costs one second
+            # to find out.
+            USE_GPU=1
+            gpu_args
+            ;;
         vgl)
             USE_GPU=1
             gpu_args
@@ -169,7 +193,8 @@ render_mode() {
             fi
             ;;
         *)
-            echo "ERROR: REALM_RENDER must be 'software' or 'vgl', not " \
+            echo "ERROR: REALM_RENDER must be 'software', 'gpu' or 'vgl'," \
+                 "not" \
                  "'${REALM_RENDER}'" >&2
             return 1
             ;;
