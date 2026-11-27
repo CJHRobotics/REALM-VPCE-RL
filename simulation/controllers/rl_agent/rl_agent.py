@@ -18,7 +18,7 @@ without editing anything. They are read once, at the top, and echoed:
                       (data/vpce/place_fields/<maze>_visual.h5)
     REALM_TIMESTEPS   step ceiling, a backstop only  (250000)
     REALM_MAX_STEPS   steps per episode              (200)
-    REALM_ALGO        DQN or PPO                     (DQN)
+    REALM_ALGO        DQN or PPO                     (PPO)
     REALM_TELEPORT    1 teleports actions, 0 drives  (1)
     REALM_SHAPING     potential-based distance shaping weight (0 = sparse)
     REALM_SEED        random seed                    (0)
@@ -108,7 +108,12 @@ ENSEMBLE = os.environ.get(
 # worst case and normally never binds.
 TIMESTEPS = int(os.environ.get('REALM_TIMESTEPS', 250_000))
 MAX_STEPS = int(os.environ.get('REALM_MAX_STEPS', 200))
-ALGO = os.environ.get('REALM_ALGO', 'DQN').upper()
+# PPO, matching eval_agent, mask_probe and train_rl.sh. This defaulted
+# to DQN while those three defaulted to PPO, so a run submitted
+# without REALM_ALGO trained DQN and wrote <arena>_dqn_s0, which the
+# analysis then went looking for under <arena>_ppo_s0. Jobs 640132
+# and 640157 were both DQN by accident.
+ALGO = os.environ.get('REALM_ALGO', 'PPO').upper()
 TELEPORT = os.environ.get('REALM_TELEPORT', '1') == '1'
 SHAPING = float(os.environ.get('REALM_SHAPING', 0.0))
 SEED = int(os.environ.get('REALM_SEED', 0))

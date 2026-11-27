@@ -10,7 +10,7 @@
 #   sbatch slurm/train_rl.sh         circ_lm8_r10
 #
 # Usage:
-#   sbatch slurm/train_rl.sh                        # circ_lm8_r10, DQN
+#   sbatch slurm/train_rl.sh                        # circ_lm8_r10, PPO
 #   sbatch slurm/train_rl.sh circ_lm8_r10
 #   REALM_TIMESTEPS=200000 sbatch slurm/train_rl.sh circ_lm8_r10
 #   REALM_ALGO=PPO REALM_SEED=1 sbatch slurm/train_rl.sh circ_lm8_r10
@@ -168,7 +168,7 @@ container_binds || exit 1
 export REALM_MAZE="$ARENA"
 ENSEMBLE="${REALM_ENSEMBLE:-data/vpce/place_fields/${ARENA}_visual.h5}"
 export REALM_ENSEMBLE="$ENSEMBLE"
-TAG="${REALM_RUN_TAG:-${ARENA}_$(echo "${REALM_ALGO:-DQN}" | tr 'A-Z' 'a-z')_s${REALM_SEED:-0}}"
+TAG="${REALM_RUN_TAG:-${ARENA}_$(echo "${REALM_ALGO:-PPO}" | tr 'A-Z' 'a-z')_s${REALM_SEED:-0}}"
 export REALM_RUN_TAG="$TAG"
 OUT_DIR="data/vpce/rl_runs/$TAG"
 
@@ -216,7 +216,7 @@ echo "Job     : ${SLURM_JOB_ID:-local}   node $(hostname)"
 echo "Arena   : $ARENA"
 echo "Ensemble: $ENSEMBLE"
 echo "Run tag : $TAG   ->  $OUT_DIR"
-echo "Algo    : ${REALM_ALGO:-DQN}   seed=${REALM_SEED:-0}"
+echo "Algo    : ${REALM_ALGO:-PPO}   seed=${REALM_SEED:-0}"
 echo "Stop at : every start under ${REALM_ESR_THRESHOLD:-1.0} extra steps per optimal step,"
 echo "          averaged over the last ${REALM_ESR_WINDOW:-100} episodes"
 echo "Budget  : ${REALM_MAX_EPISODES:-1000} episodes   (${REALM_TIMESTEPS:-250000} steps as a backstop)"
@@ -284,7 +284,7 @@ timeout --signal=TERM --kill-after=60 "$WEBOTS_TIMEOUT" \
     --env REALM_RUN_TAG="$TAG" \
     --env REALM_TIMESTEPS="${REALM_TIMESTEPS:-250000}" \
     --env REALM_MAX_STEPS="${REALM_MAX_STEPS:-200}" \
-    --env REALM_ALGO="${REALM_ALGO:-DQN}" \
+    --env REALM_ALGO="${REALM_ALGO:-PPO}" \
     --env REALM_TELEPORT="${REALM_TELEPORT:-1}" \
     --env REALM_SHAPING="${REALM_SHAPING:-0}" \
     --env REALM_SEED="${REALM_SEED:-0}" \
