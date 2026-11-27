@@ -245,7 +245,15 @@ class WebotsEnv(gym.Env):
         # diagnosis and the three parts fail for different reasons: the
         # lidar read is one simulated step, the action is a teleport or a
         # PID drive, and the observation is eight renders and eight HOG
-        # extractions. A step that blows up in ONE of them is a stuck robot
+        # extractions.
+        #
+        # The first is reported as `lidar`, not `mask`. It is the ACTION
+        # mask -- get_possible_actions reading the lidar to see which of the
+        # eight bearings are clear -- and has nothing whatever to do with
+        # the minimal-mask saliency in rl_lib/mask_saliency.py, which runs
+        # only in the mask_probe controller, after training, and is not
+        # imported here. One word, two meanings, and the log should not be
+        # the place anyone finds that out. A step that blows up in ONE of them is a stuck robot
         # or a pathological view; a step uniformly slow in all three is the
         # machine, not the simulation.
         #
@@ -334,9 +342,15 @@ class WebotsEnv(gym.Env):
         if total < self.SLOW_STEP:
             return
         x, y, _h = info['pose']
+        # The observation's own split, when the observer provides one: eight
+        # renders against eight descriptor extractions.
+        t = getattr(self.observer, 'last_timing', None)
+        inner = (f' [renders {t["capture"]:.1f}s + features {t["features"]:.1f}s]'
+                 if t else '')
         print(f'  [slow step] {total:.1f}s at step {self.current_step} '
-              f'from ({x:.2f}, {y:.2f}): mask {t_mask - t0:.1f}s, '
-              f'action {t_act - t_mask:.1f}s, observe {t_obs - t_act:.1f}s '
+              f'from ({x:.2f}, {y:.2f}), {np.hypot(x, y):.1f} m from centre: '
+              f'lidar {t_mask - t0:.1f}s, action {t_act - t_mask:.1f}s, '
+              f'observe {t_obs - t_act:.1f}s{inner} '
               f'(action {action}{", blocked" if blocked else ""})',
               flush=True)
 

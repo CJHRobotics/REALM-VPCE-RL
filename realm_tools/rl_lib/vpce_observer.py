@@ -32,6 +32,8 @@ cell, and matches how the place-field paper measured them. It also means
 eight camera renders per environment step, which dominates step time.
 """
 
+import time
+
 import numpy as np
 
 from realm_tools.place_cell_lib.place_cells import VisualPlaceCellEnsemble
@@ -81,6 +83,10 @@ class VpceObserver:
         # Which descriptors to compute. Asking extract_feature_dict for a
         # block the ensemble does not use would be wasted work on every step,
         # and HOG is the expensive one.
+        # Filled by blocks_from_robot: seconds spent rendering and seconds
+        # spent on descriptors, for the last observation taken.
+        self.last_timing = dict(capture=0.0, features=0.0)
+
         self._flags = dict(
             use_hog='hog' in self.channels,
             use_color_hist='color_hist' in self.channels,
@@ -148,6 +154,14 @@ class VpceObserver:
         else:
             x, y, _ = robot.get_robot_pose()
             heading = self._read_heading(robot)
+        # Timed in two parts and left on the observer for whoever wants it.
+        # "the observation was slow" is two very different findings: eight
+        # renders are the simulator's cost and depend on where the robot is
+        # standing and what is in view, while eight HOG extractions are this
+        # process's cost and depend on nothing but the image size. A step
+        # that is slow in the first is a rendering problem; in the second,
+        # a CPU one.
+        t0 = time.perf_counter()
         try:
             images, _masks, _azimuths, lidar_scan = robot.capture_pov_images(
                 list(THETAS), lidar_heading_index=LIDAR_HEADING_INDEX)
@@ -162,8 +176,11 @@ class VpceObserver:
         if len(images) != len(THETAS):
             raise RuntimeError(f'expected {len(THETAS)} headings, '
                                f'got {len(images)}')
+        t_capture = time.perf_counter()
 
         per_heading = [extract_feature_dict(img, **self._flags) for img in images]
+        self.last_timing = dict(capture=t_capture - t0,
+                                features=time.perf_counter() - t_capture)
 
         blocks = {}
         for key in self.visual_keys:
