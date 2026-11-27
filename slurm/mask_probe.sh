@@ -23,7 +23,22 @@
 #SBATCH --partition=general
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
+#
+# 32, up from 16, to match collection -- which is the job on this cluster
+# that renders reliably. Software rendering is the entire cost of a step and
+# llvmpipe is thread-scaled and memory-bandwidth-bound, so the allocation is
+# not a detail.
+#
+# It is not the whole story either. Job 637610 on GPU4 ran at 24 SECONDS per
+# environment step against 0.10 s for the same arena two days earlier: 234x,
+# on identical code and an identical render path. That is not a node class
+# -- container/README.md measures a 10x spread between the slow and fast
+# nodes -- it is contention, from whatever else was on GPU4 at the time.
+#
+# `sbatch --exclusive slurm/train_rl.sh ...` is the answer when a run comes
+# back slow. It is not the default because it holds a whole GPU node and
+# queues accordingly, and most runs do not need it.
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --exclude=GPU1,GPU2,GPU45,GPU46,GPU47,GPU48,GPU49,GPU53
@@ -113,6 +128,10 @@ write_runtime_ini
 
 export LP_NUM_THREADS="${LP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-8}}"
 export PYTHONUNBUFFERED=1
+# A marker to date this job's own output against; see the attach
+# filter below, and the same device in train_rl.sh.
+T_MARK="$(mktemp "${TMPDIR:-/tmp}/maskprobe.XXXXXX")"
+trap 'rm -f "$T_MARK"' EXIT
 T_START=$(date +%s)
 
 WEBOTS_TIMEOUT="${WEBOTS_TIMEOUT:-14000}"
@@ -147,9 +166,18 @@ echo "Finished : $(date -Is)  (exit ${STATUS}, ${ELAPSED}s)"
 echo "--- produced ---"
 ls -lh "$OUT_DIR/" 2>/dev/null || echo "(nothing in $OUT_DIR)"
 
+# Only files this job wrote: the output directory is reused per run tag,
+# and a job that produces nothing would otherwise mail the previous run's
+# CSVs as its own. See the same fix in train_rl.sh.
 ATTACH=()
 for f in "$OUT_DIR/mask_steps.csv" "$OUT_DIR/mask_cells.csv" "$OUT_DIR/config.json"; do
-    [[ -f "$f" ]] && ATTACH+=("$f")
+    [[ -f "$f" ]] || continue
+    if [[ ! "$f" -nt "$T_MARK" ]]; then
+        echo "  skipping $(basename "$f"): older than this job, left by an "\
+             "earlier one"
+        continue
+    fi
+    ATTACH+=("$f")
 done
 
 "$PYTHON_BIN" - "$ARENA" "$TAG" "$STATUS" "$ELAPSED" "$OUT_DIR" \

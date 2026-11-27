@@ -66,7 +66,22 @@
 #SBATCH --partition=general
 #SBATCH --time=24:00:00
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
+#
+# 32, up from 16, to match collection -- which is the job on this cluster
+# that renders reliably. Software rendering is the entire cost of a step and
+# llvmpipe is thread-scaled and memory-bandwidth-bound, so the allocation is
+# not a detail.
+#
+# It is not the whole story either. Job 637610 on GPU4 ran at 24 SECONDS per
+# environment step against 0.10 s for the same arena two days earlier: 234x,
+# on identical code and an identical render path. That is not a node class
+# -- container/README.md measures a 10x spread between the slow and fast
+# nodes -- it is contention, from whatever else was on GPU4 at the time.
+#
+# `sbatch --exclusive slurm/train_rl.sh ...` is the answer when a run comes
+# back slow. It is not the default because it holds a whole GPU node and
+# queues accordingly, and most runs do not need it.
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --exclude=GPU1,GPU2,GPU45,GPU46,GPU47,GPU48,GPU49,GPU53
@@ -299,16 +314,32 @@ print('\n'.join(learning_curve.summarise(s)))
 " || echo "  (could not build a curve from the partial log)"
 fi
 
+# ONLY FILES THIS JOB WROTE. The output directory is per run tag and is
+# reused, so a job that produces nothing leaves the previous run's figures
+# and result.json sitting in it -- and this report used to pick them up and
+# describe them as its own. Job 637610 exited 124 having trained 2048 steps,
+# and mailed "VERDICT: success 0% -> 100%, the agent learned" out of a
+# result.json two days older than itself.
+#
+# T_MARK is a file mktemp'd at the top of this job, so `find -newer` is a
+# plain mtime comparison against the moment the job started -- POSIX, no
+# date parsing, and the marker already existed for exactly this kind of
+# use. Files older than it are counted and named as stale rather than read.
 ATTACH=()
 while IFS= read -r f; do
     [[ -n "$f" ]] && ATTACH+=("$f")
 done < <(
-    find "$OUT_DIR" -name '*.png' 2>/dev/null
-    find "$OUT_DIR" -name 'result.json' -o -name 'config.json' 2>/dev/null
+    find "$OUT_DIR" -newer "$T_MARK" \
+        \( -name '*.png' -o -name 'result.json' -o -name 'config.json' \) \
+        2>/dev/null
 )
+STALE=()
+while IFS= read -r f; do
+    [[ -n "$f" ]] && STALE+=("$(basename "$f")")
+done < <(find "$OUT_DIR" -type f ! -newer "$T_MARK" 2>/dev/null)
 
-"$PYTHON_BIN" - "$ARENA" "$TAG" "$STATUS" "$ELAPSED" "$OUT_DIR" \
-    "${ATTACH[@]+"${ATTACH[@]}"}" <<'PYMAIL'
+"$PYTHON_BIN" - "$ARENA" "$TAG" "$STATUS" "$ELAPSED" "$OUT_DIR" "$T_MARK" \
+    "${STALE[*]:-}" "${ATTACH[@]+"${ATTACH[@]}"}" <<'PYMAIL'
 import json
 import os
 import sys
@@ -316,8 +347,18 @@ import sys
 sys.path.insert(0, os.getcwd())
 from realm_tools.experiment_lib.reporting import send_email
 
-arena, tag, status, elapsed, out_dir = sys.argv[1:6]
-attachments = sys.argv[6:]
+arena, tag, status, elapsed, out_dir, t_mark = sys.argv[1:7]
+stale = [n for n in sys.argv[7].split() if n]
+attachments = sys.argv[8:]
+started = os.path.getmtime(t_mark)
+
+
+def from_this_run(path):
+    """Was it written by THIS job? The directory is reused per run tag."""
+    try:
+        return os.path.getmtime(path) >= started
+    except OSError:
+        return False
 status, elapsed = int(status), int(elapsed)
 ok = status == 0
 
@@ -330,7 +371,7 @@ lines = [f'RL training | arena = {arena} | run = {tag}',
 
 for name in ('config.json', 'result.json'):
     path = os.path.join(out_dir, name)
-    if not os.path.exists(path):
+    if not os.path.exists(path) or not from_this_run(path):
         continue
     try:
         with open(path) as f:
@@ -348,7 +389,10 @@ for name in ('config.json', 'result.json'):
 
 # The verdict, stated rather than left to be inferred from the attachment.
 try:
-    with open(os.path.join(out_dir, 'result.json')) as f:
+    rp = os.path.join(out_dir, 'result.json')
+    if not from_this_run(rp):
+        raise FileNotFoundError(rp)
+    with open(rp) as f:
         r = json.load(f)
     before, after = r.get('success_before'), r.get('success_after')
     if before is not None and after is not None:
@@ -358,6 +402,13 @@ try:
                           'the goal was ever reached during exploration')
 except Exception:                                           # noqa: BLE001
     lines.append('VERDICT: no result.json -- the run did not finish')
+
+if stale:
+    lines.append('')
+    lines.append(f'{len(stale)} file(s) in {out_dir} predate this job and are '
+                 f'NOT reported above:')
+    lines.append('  ' + ', '.join(sorted(stale)))
+    lines.append('  They are from an earlier run under the same tag.')
 
 lines.append('')
 figs = [a for a in attachments if a.endswith('.png')]
