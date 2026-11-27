@@ -233,6 +233,17 @@ echo "Started : $(date -Is)"
 echo "Git     : $(git rev-parse --short HEAD 2>/dev/null || echo 'no git')"
 echo "===================================================================="
 
+# Say at the START what is already in the output directory, not only in the
+# report at the end. A run under a tag that has run before inherits its
+# figures and result.json, and while they are no longer mailed as this
+# run's, the useful moment to notice them is now -- before 23 hours pass.
+if [[ -n "$(ls -A "$OUT_DIR" 2>/dev/null)" ]]; then
+    echo "NOTE: $OUT_DIR already holds files from an earlier run under this tag:"
+    ls -1 "$OUT_DIR" | sed 's/^/        /'
+    echo "      Only files written by THIS job will be reported. Delete them"
+    echo "      first if you would rather start clean."
+fi
+
 preflight || { echo 'PREFLIGHT FAILED - not launching Webots' >&2; exit 1; }
 write_runtime_ini
 
