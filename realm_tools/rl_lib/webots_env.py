@@ -348,7 +348,10 @@ class WebotsEnv(gym.Env):
         # Printed so the three add up to `observe`. Anything left over is
         # time this breakdown does not account for, and seeing the gap is
         # the point of printing the parts at all.
-        inner = (f' [renders {t["capture"]:.1f} + hog {t["features"]:.1f} '
+        # `sim` is Webots' own step(): physics AND rendering together, not
+        # the render alone. --no-rendering is what separates those two.
+        inner = (f' [sim {t.get("sim", 0.0):.1f} + image '
+                 f'{t.get("image", 0.0):.1f} + hog {t["features"]:.1f} '
                  f'+ encode {t.get("encode", 0.0):.1f}]' if t else '')
         print(f'  [slow step] {total:.1f}s at step {self.current_step} '
               f'from ({x:.2f}, {y:.2f}), {np.hypot(x, y):.1f} m from centre: '

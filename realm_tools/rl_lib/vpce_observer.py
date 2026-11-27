@@ -179,7 +179,10 @@ class VpceObserver:
         t_capture = time.perf_counter()
 
         per_heading = [extract_feature_dict(img, **self._flags) for img in images]
+        inner = dict(getattr(robot, 'capture_timing', {}) or {})
         self.last_timing = dict(capture=t_capture - t0,
+                                sim=inner.get('sim', 0.0),
+                                image=inner.get('image', 0.0),
                                 features=time.perf_counter() - t_capture,
                                 encode=self.last_timing.get('encode', 0.0))
 

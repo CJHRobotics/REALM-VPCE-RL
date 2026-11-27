@@ -3,12 +3,17 @@ from realm_tools.robot_lib.hambot import HamBot
 from realm_tools.image_lib.image_feature_lib import *
 from realm_tools.robot_lib.navigation_tools import *
 import operator
+import time
+
 import numpy as np
 import math
 class MyRobot(HamBot):
     def __init__(self, action_length=0.5):
         HamBot.__init__(self)
         self.action_length = action_length
+        # Filled per capture: seconds inside Webots' own step()
+        # against seconds fetching and converting the images.
+        self.capture_timing = {'sim': 0.0, 'image': 0.0}
         self.action_set = {
             0: [0, self.action_length],
             1: [45, self.action_length],
@@ -62,6 +67,7 @@ class MyRobot(HamBot):
         landmark_masks = []
         landmark_azimuths = []
         lidar_scan = None
+        self.capture_timing = {'sim': 0.0, 'image': 0.0}
         for i, theta in enumerate(thetas):
             self.robot_rotation_field.setSFRotation([0, 0, 1, theta])
             pov, mask, azimuths = self.get_pov_image()
@@ -90,7 +96,20 @@ class MyRobot(HamBot):
         return np.concatenate(multimodal_features)
 
     def get_pov_image(self):
+        """One camera frame at the current heading.
+
+        The step() below is a SIMULATION step: Webots advances physics and
+        renders every enabled device in it. So the time it takes is physics
+        AND rendering together, and calling it "the render" -- as an earlier
+        version of the timing around this did -- hides half of what it
+        could be. Timed apart from the image fetch so the two are at least
+        separable; to separate physics from rendering, run Webots with
+        --no-rendering and see which number moves.
+        """
+        _t0 = time.perf_counter()
         while self.experiment_supervisor.step(self.timestep) != -1:
+            self.capture_timing['sim'] += time.perf_counter() - _t0
+            _t1 = time.perf_counter()
             # getImage() returns raw BGRA bytes — much faster than getImageArray()
             # which returns a Python list of lists that must be converted to numpy.
             w = self.camera.getWidth()
@@ -101,6 +120,7 @@ class MyRobot(HamBot):
             pov = np.ascontiguousarray(img_bgra[:, :, 2::-1])
 
             landmark_mask, landmark_azimuths = self.get_landmark_observations()
+            self.capture_timing['image'] += time.perf_counter() - _t1
             return pov, landmark_mask, landmark_azimuths
 
     def get_landmark_observations(self):
