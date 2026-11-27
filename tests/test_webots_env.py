@@ -399,11 +399,11 @@ def test_learn_then_verify_loop_survives(_budget=1200):
     """
     from stable_baselines3.common.monitor import Monitor
     from realm_tools.rl_lib.agents import make_agent
-    from realm_tools.rl_lib.callbacks import ConvergenceStopper
+    from realm_tools.rl_lib.callbacks import ExtraStepStopper
 
     env = Monitor(WebotsEnv(StartsRobot(), FakeObserver(n=16), max_steps=20,
                             start_index=-1),
-                  info_keywords=('is_success',))
+                  info_keywords=('is_success', 'start_index'))
     model = make_agent('DQN', env, seed=0, verbose=0,
                        learning_starts=10, buffer_size=1000)
 
@@ -416,8 +416,11 @@ def test_learn_then_verify_loop_survives(_budget=1200):
             done = term or trunc
         return bool(term)
 
-    stopper = ConvergenceStopper(window=5, threshold=0.8, min_episodes=5,
-                                 verbose=0)
+    # Optima small enough that the toy policy can clear the bar, so the
+    # loop actually reaches the verify-and-resume path this test is about.
+    stopper = ExtraStepStopper({i: 2 for i in range(4)}, threshold=50.0,
+                               window=5, min_per_start=1, max_episodes=10_000,
+                               verbose=0)
     checks = 0
     while model.num_timesteps < _budget:
         model.learn(total_timesteps=_budget - model.num_timesteps,

@@ -44,6 +44,9 @@ connected, and does not care how that happened.
 
 from dataclasses import dataclass
 
+import os
+import time
+
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -142,6 +145,15 @@ class WebotsEnv(gym.Env):
         self._ep_reward = 0.0
         # start index -> the most recent completed episode from that start.
         self.last_paths = {}
+        self._escaped = False
+        # Outside this, the robot is somewhere no action could have put it.
+        # A little slack past the wall, so brushing it is not an alarm.
+        try:
+            cw = robot.maze.circular_walls[0]
+            self._arena_centre = (float(cw.x), float(cw.y))
+            self._arena_bound = float(cw.radius) + 0.5
+        except Exception:                                   # noqa: BLE001
+            self._arena_centre, self._arena_bound = (0.0, 0.0), None
 
     # ------------------------------------------------------------- helpers
 
@@ -212,6 +224,7 @@ class WebotsEnv(gym.Env):
             index = int(self.np_random.integers(n))
         self.robot.move_to_start(mode=self.start_mode, index=index)
         self.start_idx = index
+        self._escaped = False
 
         x, y, _ = self._pose()
         self._path = [(float(x), float(y))]
@@ -228,7 +241,21 @@ class WebotsEnv(gym.Env):
         self.current_step += 1
         cfg = self.reward_cfg
 
+        # Timed in three parts, because "the step was slow" is not a
+        # diagnosis and the three parts fail for different reasons: the
+        # lidar read is one simulated step, the action is a teleport or a
+        # PID drive, and the observation is eight renders and eight HOG
+        # extractions. A step that blows up in ONE of them is a stuck robot
+        # or a pathological view; a step uniformly slow in all three is the
+        # machine, not the simulation.
+        #
+        # Reported only past REALM_SLOW_STEP seconds, so a healthy run is
+        # silent and a run like job 637610 -- which averaged 24 s a step
+        # where the same arena had taken 0.1 s two days before, with no way
+        # to tell which part -- says so at the time, with the pose.
+        t0 = time.perf_counter()
         mask = self._action_mask()
+        t_mask = time.perf_counter()
         blocked = self.mask_actions and mask[action] == 0
 
         if not blocked:
@@ -244,6 +271,8 @@ class WebotsEnv(gym.Env):
                     self.robot.perform_training_action_teleport(action)
             else:
                 self.robot.perform_training_action(action)
+
+        t_act = time.perf_counter()
 
         terminated = bool(self.robot.check_at_goal())
         dist = float(self.robot.get_dist_to_goal())
@@ -268,12 +297,16 @@ class WebotsEnv(gym.Env):
         # it were expensive to produce and unused -- it is not unused: SB3
         # bootstraps from the final observation on truncation.
         obs = self.observer.observe(self.robot)
+        t_obs = time.perf_counter()
         # The mask computed at the top of this step is reused rather than
         # recomputed. get_possible_actions() advances the simulation to read
         # the lidar, so computing it twice per step cost an entire extra
         # render for a value that has not changed since -- the robot is back
         # where the action left it, the observer having restored its pose.
         info = self._info(mask, blocked=blocked, terminated=terminated)
+
+        self._report_if_slow(action, blocked, info, t0, t_mask, t_act, t_obs)
+        self._check_inside(info)
 
         self._path.append((info['pose'][0], info['pose'][1]))
         self._ep_reward += float(reward)
@@ -291,6 +324,50 @@ class WebotsEnv(gym.Env):
                 final_dist=info['dist_to_goal'],
             )
         return obs, float(reward), terminated, truncated, info
+
+    # Seconds a step may take before it is worth a line in the log. Set
+    # REALM_SLOW_STEP=0 to time every step.
+    SLOW_STEP = float(os.environ.get('REALM_SLOW_STEP', 2.0))
+
+    def _report_if_slow(self, action, blocked, info, t0, t_mask, t_act, t_obs):
+        total = t_obs - t0
+        if total < self.SLOW_STEP:
+            return
+        x, y, _h = info['pose']
+        print(f'  [slow step] {total:.1f}s at step {self.current_step} '
+              f'from ({x:.2f}, {y:.2f}): mask {t_mask - t0:.1f}s, '
+              f'action {t_act - t_mask:.1f}s, observe {t_obs - t_act:.1f}s '
+              f'(action {action}{", blocked" if blocked else ""})',
+              flush=True)
+
+    def _check_inside(self, info):
+        """Has the robot left the arena?
+
+        It should not be able to. Actions are teleports of a fixed length,
+        teleport_robot calls resetPhysics, and the action mask refuses a
+        direction with anything inside 0.75 m. But a teleport that lands
+        overlapping an obstacle leaves ODE to resolve the penetration on
+        the next step, and that is the one path by which a robot can be
+        thrown somewhere no action could have taken it.
+
+        If it happens the episode is already meaningless, and so is every
+        observation in it. Said loudly, once per episode, rather than
+        silently producing 200 steps of nonsense.
+        """
+        bound = getattr(self, '_arena_bound', None)
+        if bound is None:
+            return
+        x, y, _h = info['pose']
+        cx, cy = getattr(self, '_arena_centre', (0.0, 0.0))
+        if ((x - cx) ** 2 + (y - cy) ** 2) <= bound * bound:
+            return
+        if not self._escaped:
+            self._escaped = True
+            print(f'  [ESCAPED] step {self.current_step}: robot at '
+                  f'({x:.2f}, {y:.2f}) is outside the {bound:.1f} m arena. '
+                  f'Everything after this in the episode is nonsense -- a '
+                  f'teleport almost certainly landed inside an obstacle and '
+                  f'the physics engine ejected it.', flush=True)
 
     def render(self):
         return None
