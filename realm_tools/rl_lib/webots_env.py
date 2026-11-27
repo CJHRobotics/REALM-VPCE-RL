@@ -345,8 +345,11 @@ class WebotsEnv(gym.Env):
         # The observation's own split, when the observer provides one: eight
         # renders against eight descriptor extractions.
         t = getattr(self.observer, 'last_timing', None)
-        inner = (f' [renders {t["capture"]:.1f}s + features {t["features"]:.1f}s]'
-                 if t else '')
+        # Printed so the three add up to `observe`. Anything left over is
+        # time this breakdown does not account for, and seeing the gap is
+        # the point of printing the parts at all.
+        inner = (f' [renders {t["capture"]:.1f} + hog {t["features"]:.1f} '
+                 f'+ encode {t.get("encode", 0.0):.1f}]' if t else '')
         print(f'  [slow step] {total:.1f}s at step {self.current_step} '
               f'from ({x:.2f}, {y:.2f}), {np.hypot(x, y):.1f} m from centre: '
               f'lidar {t_mask - t0:.1f}s, action {t_act - t_mask:.1f}s, '

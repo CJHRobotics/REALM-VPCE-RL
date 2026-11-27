@@ -85,7 +85,7 @@ class VpceObserver:
         # and HOG is the expensive one.
         # Filled by blocks_from_robot: seconds spent rendering and seconds
         # spent on descriptors, for the last observation taken.
-        self.last_timing = dict(capture=0.0, features=0.0)
+        self.last_timing = dict(capture=0.0, features=0.0, encode=0.0)
 
         self._flags = dict(
             use_hog='hog' in self.channels,
@@ -180,7 +180,8 @@ class VpceObserver:
 
         per_heading = [extract_feature_dict(img, **self._flags) for img in images]
         self.last_timing = dict(capture=t_capture - t0,
-                                features=time.perf_counter() - t_capture)
+                                features=time.perf_counter() - t_capture,
+                                encode=self.last_timing.get('encode', 0.0))
 
         blocks = {}
         for key in self.visual_keys:
@@ -200,7 +201,19 @@ class VpceObserver:
         return blocks
 
     def observe(self, robot):
-        """One panoramic observation as a (n_cells,) float32 activation."""
+        """One panoramic observation as a (n_cells,) float32 activation.
+
+        THREE costs, not two, and the third is easy to leave out of a
+        measurement. blocks_from_robot renders and extracts; encode then
+        puts 58,912 features through 1,228 RBF centres, which 0a8100a
+        measured at 63% of a training step before it was made cheaper. An
+        earlier version of this timing split the renders from the
+        descriptors and stopped there, so a slow encode would have shown up
+        as a fast capture, a fast extraction, and an unexplained gap that
+        nobody would have thought to look for.
+        """
         blocks = self.blocks_from_robot(robot)
+        t0 = time.perf_counter()
         act = self.ensemble.encode(blocks, normalize=self.normalize)
+        self.last_timing['encode'] = time.perf_counter() - t0
         return np.asarray(act[0], dtype=np.float32)
